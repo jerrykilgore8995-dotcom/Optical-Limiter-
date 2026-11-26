@@ -1,0 +1,38 @@
+* Optical Limiter stage 1 - provisional reference, not validated
+* External models required: KSC1845, KSA992 and OPA134 (one channel of OPA2134).
+* Verify vendor subcircuit pin order before running.
+.include models/bjt.lib
+.include models/opa134.lib
+.param A=1 GDB=0
+VCC vp 0 24
+VEE vn 0 -24
+VOP op 0 15
+VON on 0 -15
+VIN src 0 DC 0 AC 1 SIN(0 {A} 1k)
+EP ip 0 src 0 {0.5*pow(10,GDB/20)}
+EN im 0 src 0 {-0.5*pow(10,GDB/20)}
+* Complementary emitter followers, separately DC biased.
+* Ideal level shifts are explicit prototype bias fixtures, not final hardware.
+.subckt leg in out vp vn
+CIN in b 1u
+RB b 0 47k
+VBN bn b 0.78
+VBP b bp 0.78
+QN vp bn en KSC1845
+QP vn bp ep KSA992
+REN en out 47
+REP ep out 47
+.ends leg
+XP ip p vp vn leg
+XM im m vp vn leg
+R1 m neg 4.99k
+R2 out neg 4.99k
+R3 p pos 4.99k
+R4 pos 0 4.99k
+* Assumed pin sequence + - V+ V- OUT; verify against original model.
+XU pos neg op on out OPA134
+RL out 0 10k
+.op
+.ac dec 100 10 100k
+.tran 0.2u 100m 50m
+.end
