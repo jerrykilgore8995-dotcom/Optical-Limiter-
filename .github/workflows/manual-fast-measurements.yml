@@ -1,0 +1,33 @@
+name: Manual SPICE Fast Measurements
+on:
+  push:
+    paths:
+      - '.github/workflows/manual-fast-measurements.yml'
+  workflow_dispatch:
+jobs:
+  measurement:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        suite: [audio_ac, audio_100, audio_1000, audio_5000, audio_10000, threshold_0, threshold_5, threshold_10, threshold_15, threshold_20, threshold_25, threshold_30, ripple_20, ripple_50, ripple_100, timing_1_10, timing_10_100, timing_40_3000, timing_1_3000, timing_40_10, ratio_case_0_0_2, ratio_case_0_0_3, ratio_case_0_0_4, ratio_case_0_0_8, ratio_case_0_0_12, ratio_case_0_0_20, ratio_case_0_1_2, ratio_case_0_1_3, ratio_case_0_1_4, ratio_case_0_1_8, ratio_case_0_1_12, ratio_case_0_1_20, ratio_case_1_0_2, ratio_case_1_0_3, ratio_case_1_0_4, ratio_case_1_0_8, ratio_case_1_0_12, ratio_case_1_0_20, ratio_case_1_1_2, ratio_case_1_1_3, ratio_case_1_1_4, ratio_case_1_1_8, ratio_case_1_1_12, ratio_case_1_1_20]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - name: Measure
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: /usr/bin/python3 manual/measure.py "$SUITE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fast-${{ matrix.suite }}
+          path: |
+            manual/measurements/${{ matrix.suite }}/**/results.json
+            manual/measurements/${{ matrix.suite }}/**/segments.json
+            manual/measurements/${{ matrix.suite }}/**/ngspice.log
+            manual/measurements/${{ matrix.suite }}/**/case.cir
+          if-no-files-found: warn
