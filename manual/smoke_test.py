@@ -1,29 +1,33 @@
 """Run a real transient and verify completion, not merely process exit."""
 from pathlib import Path
-import subprocess, re, math
+import subprocess, re, math, shutil
 root=Path(__file__).resolve().parent
 out=root/'results'
 out.mkdir(exist_ok=True)
-source=(root/'manual.cir').read_text()
+# Same self-contained case directory strategy as Tube-Comp/scripts/run_lab.py.
+wd=out/'smoke_case'
+wd.mkdir(exist_ok=True)
+shutil.copytree(root.parent/'stage1'/'models',wd/'models',dirs_exist_ok=True)
+source=(root/'manual.cir').read_text().replace('../stage1/models/','models/')
 # Use an explicit control block: batch ngspice otherwise has no requested
 # print, plot or rawfile output in the original smoke-test invocation.
 deck=re.sub(r'(?im)^\.end\s*$',""".control
 set wr_singlescale
 set wr_vecnames
-tran 0.5u 200m
-wrdata results/manual_transient.dat v(pre) v(gr) v(out) v(rect) v(timing) v(sense)
+tran 0.5u 200m 0 0.5u
+wrdata manual_transient.dat v(pre) v(gr) v(out) v(rect) v(timing) v(sense)
 quit
 .endc
 .end
 """,source)
 deck=re.sub(r'(?im)^\.tran[^\n]*\n','',deck)
 # Remove only the original .tran directive (control command has no dot).
-p=root/'smoke_generated.cir'
+p=wd/'case.cir'
 p.write_text(deck)
-data=out/'manual_transient.dat'
+data=wd/'manual_transient.dat'
 data.unlink(missing_ok=True)
 try:
-    proc=subprocess.run(['ngspice','-b',str(p)],cwd=root,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=240)
+    proc=subprocess.run(['ngspice','-b','case.cir'],cwd=wd,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=240)
     (out/'manual.log').write_text(proc.stdout)
     print(proc.stdout)
     if proc.returncode or re.search(r'error:|timestep too small|fatal|simulation\s+aborted',proc.stdout,re.I):
@@ -44,4 +48,4 @@ try:
         raise RuntimeError(f'Transient did not reach 200 ms; last row={last}')
     print(f'PASS: {count} finite transient samples, final time {last[0]:.9f} s')
 finally:
-    p.unlink(missing_ok=True)
+    pass  # preserve exact failing deck and model files for diagnosis
