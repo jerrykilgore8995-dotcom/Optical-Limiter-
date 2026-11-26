@@ -38,6 +38,13 @@ def tone(x,f,col):
     y=np.interp(t,x[:,0],x[:,col]);y-=y.mean()
     a=[abs(2/n*np.dot(y,np.exp(-2j*np.pi*k*f*t))) for k in range(1,21)]
     return {'peak_V':float(a[0]),'THD_percent':float(100*np.linalg.norm(a[1:])/max(a[0],1e-30)),'harmonics_normalized_dBFS':{f'K{k}':db(a[k-1]/max(a[0],1e-30)) if k*f<22050 else None for k in range(1,21)}}
+def steady(x,f=1000):
+    end=x[-1,0]; period=10/f
+    def avg(lo,hi):
+        a=x[(x[:,0]>=lo)&(x[:,0]<hi)]
+        return float(np.mean(20*np.log10(1+10000*np.clip(a[:,7],2e-8,.005))))
+    a,b=avg(end-2*period,end-period),avg(end-period,end)
+    return {'GR_settling_delta_dB':abs(b-a),'settled':abs(b-a)<.05}
 def attempt(tag,fn):
     try: save({'case':tag,'status':'OK',**fn()})
     except Exception as e: save({'case':tag,'status':'FAILED','error':str(e)})
@@ -46,12 +53,14 @@ def audio():
         x=run(f'ac_{load}',{'SENS':0},edit=lambda s:s.replace('RL out 0 10k',f'RL out 0 {load}').replace('SIN(0 {AMP} {FREQ})','SIN(0 {AMP} {FREQ}) AC 1'),ac=True)
         z=x[:,1]+1j*x[:,2]; mid=np.argmin(abs(x[:,0]-1000))
         return {'load_ohm':load,'frequency_Hz':x[:,0].tolist(),'gain_dB':[db(a) for a in z],'relative_dB':[db(a/z[mid]) for a in z],'phase_deg':np.degrees(np.unwrap(np.angle(z))).tolist()}
-    for l in [600,2000,10000,47000]: attempt(f'ac_{l}',lambda l=l:response(l))
-    for f in [100,1000,5000,10000]:
+    if SUITE in ('audio','audio_ac'):
+        for l in [600,2000,10000,47000]: attempt(f'ac_{l}',lambda l=l:response(l))
+    if SUITE=='audio_ac': return
+    for f in ([int(SUITE.split('_')[1])] if SUITE.startswith('audio_') else [100,1000,5000,10000]):
         for level in [-18,-12,-8,-4,0,4,8,12,18]:
             tag=f'tone_{f}_{level}'
             def case():
-                x=run(tag,{'SENS':0,'FREQ':f,'AMP':peak(level)},seconds=max(.15,25/f),step=min(5e-6,1/(64*f)))
+                x=run(tag,{'SENS':0,'FREQ':f,'AMP':peak(level)},seconds=max(.08,22/f),step=min(10e-6,1/(64*f)))
                 return {'Hz':f,'input_dBu':level,'receiver':tone(x,f,1),'optical_amp':tone(x,f,2),'output':tone(x,f,3)}
             attempt(tag,case)
 def optical():
@@ -72,28 +81,29 @@ def optical():
         return {'recovery_to_100k_ms':float((x[ix[0],0]-.020001)*1000) if len(ix) else None,'model_only':True,'voltage_dependent_LDR_distortion':'NOT IMPLEMENTED'}
     attempt('recovery',recovery)
 def threshold():
-    for sens in range(0,31,5):
+    for sens in ([int(SUITE.split('_')[1])] if SUITE.startswith('threshold_') else range(0,31,5)):
         for level in [-30,-12,0,12]:
             tag=f'threshold_{sens}_{level}'
             def case():
-                x=run(tag,{'SENS':sens,'AMP':peak(level)},seconds=.3)
-                t=x[-1]; return {'sensitivity_dB':sens,'input_dBu':level,'pot_V':float(t[10]),'detector_V':float(t[8]),'log_V':float(t[9]),'expected_log_V':2*math.log10(max(1e-9,min(15,t[8]))),'command_V':float(t[11]),'GR_dB':db(tone(x,1000,1)['peak_V']/max(tone(x,1000,2)['peak_V'],1e-30))}
+                x=run(tag,{'SENS':sens,'AMP':peak(level)},seconds=.18,step=20e-6)
+                t=x[-1]; return {'sensitivity_dB':sens,'input_dBu':level,'pot_V':float(t[10]),'detector_V':float(t[8]),'log_V':float(t[9]),'expected_log_V':2*math.log10(max(1e-9,min(15,t[8]))),'command_V':float(t[11]),**steady(x),'GR_dB':db(tone(x,1000,1)['peak_V']/max(tone(x,1000,2)['peak_V'],1e-30))}
             attempt(tag,case)
 def ratio_suite():
     _,_,ff,soft,ratio=SUITE.split('_');ff,soft,ratio=map(int,(ff,soft,ratio))
     good=[]
-    for level in range(-48,19,2):
+    for level in list(range(-48,19,6))+[18] if 18 not in range(-48,19,6) else range(-48,19,6):
         tag=f'ratio_{level}'
         def case():
-            x=run(tag,{'FF':ff,'SOFT':soft,'RATIO':ratio,'SENS':30,'AMP':peak(level)},seconds=.45)
+            x=run(tag,{'FF':ff,'SOFT':soft,'RATIO':ratio,'SENS':30,'AMP':peak(level)},seconds=.22,step=20e-6)
             a=tone(x,1000,1)['peak_V'];b=tone(x,1000,2)['peak_V']
-            row={'input_dBu':level,'pre_dBu':db(a/math.sqrt(2)/.775),'output_dBu':db(b/math.sqrt(2)/.775),'GR_dB':db(a/max(b,1e-30))}
-            good.append(row);return row
+            row={'input_dBu':level,'pre_dBu':db(a/math.sqrt(2)/.775),'output_dBu':db(b/math.sqrt(2)/.775),'GR_dB':db(a/max(b,1e-30)),**steady(x)}
+            if row['settled']: good.append(row)
+            return row
         attempt(tag,case)
     # Interpolate crossing along increasing input, do not extrapolate.
     def cross(target):
         for a,b in zip(good,good[1:]):
-            if b['input_dBu']-a['input_dBu']!=2:continue
+            if b['input_dBu']-a['input_dBu']>6:continue
             ga,gb=a['GR_dB'],b['GR_dB']
             if ga<=target<=gb and gb>ga:
                 w=(target-ga)/(gb-ga)
@@ -108,10 +118,10 @@ def ratio_suite():
 def timing():
     # Separate independently dispatched timing suite per knob pair.
     for att,rel in ([(int(SUITE.split('_')[1]),int(SUITE.split('_')[2]))] if SUITE.startswith('timing_') else [(1,10),(10,100),(40,3000),(1,3000),(40,10)]):
-        for level in [-12,-4,4,12,18]:
+        for level in [-30,-24,-18,-12]:
             tag=f'burst_{att}_{rel}_{level}'
             def case():
-                rise=.15;fall=rise+max(.3,att/1000*8);end=fall+max(.2,rel/1000*5)
+                rise=.05;fall=rise+max(.12,att/1000*6);end=fall+max(.12,rel/1000*2)
                 def edit(s):
                     return re.sub(r'(?m)^VIN src.*$',f'BINPUT src 0 V={{sin(2*pi*1000*time)*({peak(level)})*ternary_fcn(time<{rise},0,ternary_fcn(time<{fall},1,0))}}',s)
                 x=run(tag,{'ATT':att/1000,'REL':rel/1000,'SENS':30},seconds=end,step=20e-6,edit=edit,signals=('pre','gr','cell','timing'))
@@ -121,21 +131,21 @@ def timing():
                 return {'attack_nominal_ms':att,'release_nominal_ms':rel,'input_dBu':level,'settled_GR_dB':plateau,'attack_63pct_ms':float((t[ai[0]]-rise)*1000) if len(ai) and plateau-base>.1 else None,'release_63pct_ms':float((t[ri[0]]-fall)*1000) if len(ri) and plateau-base>.1 else None,'GR_source':'optical conductance, not audio envelope'}
             attempt(tag,case)
 def ripple():
-    for f in [20,50,100]:
+    for f in ([int(SUITE.split('_')[1])] if SUITE.startswith('ripple_') else [20,50,100]):
         for ff in [0,1]:
             for ratio in [4,12]:
                 for level in [-4,4,12]:
                     tag=f'ripple_{f}_{ff}_{ratio}_{level}'
                     def case():
-                        x=run(tag,{'FREQ':f,'FF':ff,'RATIO':ratio,'SENS':30,'AMP':peak(level)},seconds=1,step=10e-6)
-                        a=x[x[:,0]>.8];g=20*np.log10(1+10000*np.clip(a[:,7],2e-8,.005))
+                        x=run(tag,{'FREQ':f,'FF':ff,'RATIO':ratio,'SENS':30,'AMP':peak(level)},seconds=.4,step=20e-6)
+                        a=x[x[:,0]>.3];g=20*np.log10(1+10000*np.clip(a[:,7],2e-8,.005))
                         return {'Hz':f,'FF':ff,'ratio':ratio,'input_dBu':level,'mean_GR_dB':float(g.mean()),'GR_ripple_pp_dB':float(np.ptp(g)),'timing_CV_pp_V':float(np.ptp(a[:,5])),'LED_sense_pp_V':float(np.ptp(a[:,6])),'output':tone(x,f,3)}
                     attempt(tag,case)
-if SUITE=='audio':audio()
+if SUITE=='audio' or SUITE.startswith('audio_'):audio()
 elif SUITE=='optical':optical()
-elif SUITE=='threshold':threshold()
+elif SUITE=='threshold' or SUITE.startswith('threshold_'):threshold()
 elif SUITE.startswith('ratio_case_'):ratio_suite()
 elif SUITE=='timing' or SUITE.startswith('timing_'):timing()
-elif SUITE=='ripple':ripple()
+elif SUITE=='ripple' or SUITE.startswith('ripple_'):ripple()
 else:raise SystemExit('Unknown suite')
 if any(r['status']!='OK' for r in ROWS):sys.exit(2)
