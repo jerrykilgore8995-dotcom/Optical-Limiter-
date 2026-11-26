@@ -24,8 +24,7 @@ jobs:
       - name: Manual circuit transient smoke test
         working-directory: manual
         run: |
-          ngspice -b -o results/manual.log manual.cir
-          if grep -Ei 'error:|timestep too small|fatal' results/manual.log; then exit 1; fi
+          python smoke_test.py
       - if: inputs.ratios == true
         run: python manual/calibrate.py --ratios
       - uses: actions/upload-artifact@v4
