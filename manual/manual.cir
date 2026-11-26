@@ -15,9 +15,15 @@ EN im 0 src 0 {-0.5*pow(10,GDB/20)}
 .subckt leg in out vp vn params: CVAL=1u
 CIN in b {CVAL}
 RB b 0 47k
-* Bias fixtures, pending physical bias network and current calibration.
-VBN bn b 0.78
-VBP b bp 0.78
+* Diode-connected complementary BJT bias string.
+* 7.5k rail resistors provide ~3mA; 47R shifts target emitter current.
+* Tune after authentic model DC operating point; Class A not yet verified.
+RBIASP vp bn 7.5k
+QBN bn bn bnp KSC1845
+RBN bnp b 47
+RBP b bpp 47
+QBP bp bp bpp KSA992
+RBIASN bp vn 7.5k
 QN vp bn en KSC1845
 QP vn bp ep KSA992
 REN en out 47
@@ -54,8 +60,13 @@ XU3A sc scbuf op on scbuf OPA134
 * HPF isolation retained; bypass selected without singular resistor values.
 CH scbuf hp 100n
 RH hp 0 {1/(6.283185307*max(HPF,10)*100n)}
-Bhp hpsel 0 V={HPF>0 ? V(hp) : V(scbuf)}
-* Behavioral ideal isolation above pending physical switch/buffer.
+VHPSEL hpsw 0 {HPF>0 ? 1 : 0}
+BHPINV hpinv 0 V={1-V(hpsw)}
+SHP hp hpselect hpsw 0 SWSEL
+SBYP scbuf hpselect hpinv 0 SWSEL
+.model SWSEL SW(Ron=0.01 Roff=1e12 Vt=0.5 Vh=0.05)
+RHPBIAS hpselect 0 100Meg
+XHPBUF hpselect hpsel op on hpsel OPA134
 RHF hpsel hfneg 10k
 RFB hfout hfneg 10k
 CFB hfout hfneg 220p
@@ -77,20 +88,40 @@ RAG an 0 10k
 RAF avgo an 5.71k
 XAVG avg an op on avgo OPA134
 * Peak branch: active hold with anti-saturation clamp.
-XPK rect pkout op on pkamp OPA134
+RPKFB pkout pkneg 10k
+XPK rect pkneg op on pkamp OPA134
 DPC pkamp charge D4148W
 RPC charge hold 100
-DCL pkout pkamp D4148W
+DCL pkneg pkamp D4148W
 CP hold 0 100n
 RP hold 0 47k
 XPKBUF hold pkout op on pkout OPA134
 * Provisional ideal log / threshold / knee / ratio blocks.
 * Absolute threshold reference 1V peak is provisional, not dBFS calibration.
 Bdet det 0 V={RATIO<8 ? max(V(avgo),1e-9) : max(V(pkout),1e-9)}
-Bover over 0 V={20*log10(V(det))+SENS}
+* Physical 50k threshold pot and buffered reference; log conversion pending.
+VREF ref 0 3
+RPTOP ref pw {max(0.01,50000*(1-SENS/30))}
+RPBOT pw 0 {max(0.01,50000*SENS/30)}
+XPOT pw pbuf op on pbuf OPA134
+BLOG logv 0 V={2*log10(V(det))}
+* Summing amplifier and inverter provide 100mV/dB over-threshold voltage.
+RLOG logv subneg 10k
+RTH pbuf subneg 10k
+RSUB subout subneg 10k
+XSUB 0 subneg op on subout OPA134
+RINV subout invneg 10k
+RIF ov100 invneg 10k
+XINV 0 invneg op on ov100 OPA134
+Bover over 0 V={10*V(ov100)}
 * Input-referred 10dB soft knee; feedback branch width approximation pending.
 Bknee knee 0 V={SENS<=0 ? 0 : SOFT ? (V(over)<-5 ? 0 : V(over)>5 ? V(over) : pow(V(over)+5,2)/20) : max(V(over),0)}
-Bcmd cmd 0 V={min(4,0.1*V(knee)*(FF ? 1-1/RATIO : RATIO-1))}
+* Physical ratio gain network, limited command still provisional.
+BK100 k100 0 V={0.1*V(knee)}
+RRIN k100 rrneg 10k
+RRF rrout rrneg {10000*(FF ? 1-1/RATIO : RATIO-1)}
+XRATIO 0 rrneg op on rrout OPA134
+Bcmd cmd 0 V={min(4,max(0,-V(rrout)))}
 * Ideal precision steering surrogate, to replace with active diode network.
 CT timing 0 1u
 BT 0 timing I={(V(cmd)-V(timing))/(V(cmd)>V(timing) ? ATT/1u : REL/1u)}
