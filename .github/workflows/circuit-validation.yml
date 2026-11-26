@@ -1,0 +1,35 @@
+name: Circuit validation
+on:
+  push:
+    paths:
+      - 'manual/**'
+      - 'stage1/models/**'
+      - '.github/workflows/circuit-validation.yml'
+  workflow_dispatch:
+    inputs:
+      ratios:
+        description: Run full ratio sweep
+        type: boolean
+        default: false
+jobs:
+  spice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ngspice
+      - run: |
+          python manual/vtl5c1_reference.py
+          python manual/calibrate.py
+      - name: Manual circuit transient smoke test
+        working-directory: manual
+        run: |
+          ngspice -b -o results/manual.log manual.cir
+          if grep -Ei 'error:|timestep too small|fatal' results/manual.log; then exit 1; fi
+      - if: inputs.ratios == true
+        run: python manual/calibrate.py --ratios
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: circuit-validation
+          path: manual/results/
