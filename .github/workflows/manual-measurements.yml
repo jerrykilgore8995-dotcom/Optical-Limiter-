@@ -1,0 +1,39 @@
+name: Manual SPICE Measurements
+on:
+  push:
+    paths:
+      - '.github/workflows/manual-measurements.yml'
+  workflow_dispatch:
+jobs:
+  measurement:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        suite: [bias, audio, optical, threshold, ripple, timing_1_10, timing_10_100, timing_40_3000, timing_1_3000, timing_40_10, ratio_case_0_0_2, ratio_case_0_0_3, ratio_case_0_0_4, ratio_case_0_0_8, ratio_case_0_0_12, ratio_case_0_0_20, ratio_case_0_1_2, ratio_case_0_1_3, ratio_case_0_1_4, ratio_case_0_1_8, ratio_case_0_1_12, ratio_case_0_1_20, ratio_case_1_0_2, ratio_case_1_0_3, ratio_case_1_0_4, ratio_case_1_0_8, ratio_case_1_0_12, ratio_case_1_0_20, ratio_case_1_1_2, ratio_case_1_1_3, ratio_case_1_1_4, ratio_case_1_1_8, ratio_case_1_1_12, ratio_case_1_1_20]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ngspice python3-numpy
+      - name: Execute independent suite
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          if [ "$SUITE" = bias ]; then
+            /usr/bin/python3 manual/calibrate.py
+          else
+            /usr/bin/python3 manual/measure.py "$SUITE"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manual-${{ matrix.suite }}
+          path: |
+            manual/measurements/${{ matrix.suite }}/**/results.json
+            manual/measurements/${{ matrix.suite }}/**/segments.json
+            manual/measurements/${{ matrix.suite }}/**/ngspice.log
+            manual/measurements/${{ matrix.suite }}/**/case.cir
+            manual/results/bias*
+          if-no-files-found: warn
