@@ -25,14 +25,13 @@ def run(tag,params=None,seconds=.25,step=5e-6,edit=lambda x:x,signals=('pre','gr
     cmd='ac dec 48 10 40000\nwrdata wave.txt v(out)' if ac else f'tran {step} {seconds} 0 {step}\nwrdata wave.txt '+' '.join('v('+s+')' for s in signals)
     deck+='\n.control\nset wr_singlescale\nset wr_vecnames\n'+cmd+'\nquit\n.endc\n.end\n'
     (wd/'case.cir').write_text(deck)
-    p=subprocess.run(['ngspice','-b','case.cir'],cwd=wd,capture_output=True,text=True,timeout=300)
+    p=subprocess.run(['ngspice','-b','case.cir'],cwd=wd,capture_output=True,text=True,timeout=900)
     log=p.stdout+p.stderr;(wd/'ngspice.log').write_text(log)
     if p.returncode or re.search(r'error:|timestep too small|simulation aborted|fatal',log,re.I): raise RuntimeError(log[-2500:])
     x=np.loadtxt(wd/'wave.txt',skiprows=1,ndmin=2)
     if not np.isfinite(x).all() or len(x)<3 or (not ac and x[-1,0]<seconds*.99999): raise RuntimeError('Incomplete or nonfinite waveform')
     return x
 def tone(x,f,col):
-    n=round(20*max(1,math.ceil(96000/(20*f)))) # overwritten by coherent sampling below
     cycles=max(3,min(20,int(x[-1,0]*f/3)))
     rate=max(96000,64*f); n=int(math.ceil(rate*cycles/f))
     t=x[-1,0]-cycles/f+np.arange(n)*cycles/f/n
@@ -108,14 +107,14 @@ def ratio_suite():
     (OUT/'segments.json').write_text(json.dumps(segments,indent=2))
 def timing():
     # Separate independently dispatched timing suite per knob pair.
-    for att,rel in [(1,10),(10,100),(40,3000),(1,3000),(40,10)]:
+    for att,rel in ([(int(SUITE.split('_')[1]),int(SUITE.split('_')[2]))] if SUITE.startswith('timing_') else [(1,10),(10,100),(40,3000),(1,3000),(40,10)]):
         for level in [-12,-4,4,12,18]:
             tag=f'burst_{att}_{rel}_{level}'
             def case():
                 rise=.15;fall=rise+max(.3,att/1000*8);end=fall+max(.2,rel/1000*5)
                 def edit(s):
                     return re.sub(r'(?m)^VIN src.*$',f'BINPUT src 0 V={{sin(2*pi*1000*time)*({peak(level)})*ternary_fcn(time<{rise},0,ternary_fcn(time<{fall},1,0))}}',s)
-                x=run(tag,{'ATT':att/1000,'REL':rel/1000,'SENS':30},seconds=end,step=10e-6,edit=edit,signals=('pre','gr','cell','timing'))
+                x=run(tag,{'ATT':att/1000,'REL':rel/1000,'SENS':30},seconds=end,step=20e-6,edit=edit,signals=('pre','gr','cell','timing'))
                 t=x[:,0];g=20*np.log10(1+10000*np.clip(x[:,3],2e-8,.005))
                 plateau=float(np.median(g[(t>fall-.05)&(t<fall)]));base=float(np.median(g[t<rise-.01]))
                 ai=np.where((t>=rise)&(t<fall)&(g>=base+.632*(plateau-base)))[0];ri=np.where((t>=fall)&(g<=base+.368*(plateau-base)))[0]
@@ -136,7 +135,7 @@ if SUITE=='audio':audio()
 elif SUITE=='optical':optical()
 elif SUITE=='threshold':threshold()
 elif SUITE.startswith('ratio_case_'):ratio_suite()
-elif SUITE=='timing':timing()
+elif SUITE=='timing' or SUITE.startswith('timing_'):timing()
 elif SUITE=='ripple':ripple()
 else:raise SystemExit('Unknown suite')
 if any(r['status']!='OK' for r in ROWS):sys.exit(2)
