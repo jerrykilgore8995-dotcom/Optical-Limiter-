@@ -1,0 +1,111 @@
+* Manual optical limiter prototype -- vendor models required
+* Run from manual/ with ngspice. No Auto mode.
+* Behavioral elements explicitly mark unimplemented physical control blocks.
+.include ../stage1/models/bjt.lib
+.include ../stage1/models/opa134.lib
+.include ../stage1/models/diodes.lib
+.param GDB=0 FREQ=1000 AMP=1 FF=1 RATIO=4 SOFT=1 SENS=15 HPF=0 ATT=10m REL=100m MAKEUP=0
+VCC vp 0 24
+VEE vn 0 -24
+VOP op 0 15
+VON on 0 -15
+VIN src 0 SIN(0 {AMP} {FREQ})
+EP ip 0 src 0 {0.5*pow(10,GDB/20)}
+EN im 0 src 0 {-0.5*pow(10,GDB/20)}
+.subckt leg in out vp vn params: CVAL=1u
+CIN in b {CVAL}
+RB b 0 47k
+* Bias fixtures, pending physical bias network and current calibration.
+VBN bn b 0.78
+VBP b bp 0.78
+QN vp bn en KSC1845
+QP vn bp ep KSA992
+REN en out 47
+REP ep out 47
+.ends leg
+XP ip p vp vn leg CVAL=1.005u
+XM im m vp vn leg CVAL=.995u
+* Reverse receiver polarity to cancel optical amplifier inversion.
+R1 p neg 4.99k
+R2 pre neg 4.99k
+R3 m pos 4.99k
+R4 pos 0 4.99k
+XU1A pos neg op on pre OPA134
+RIN pre sum 10k
+RF gr sum 10k
+CF gr sum 100p
+XU1B 0 sum op on gr OPA134
+* Provisional VTL5C1 conductance state, not validated against dynamic curves.
+* Nominal resistance anchors 1mA=20k, 10mA=600, 40mA=200.
+Btarget target 0 V={min(0.005,max(2e-8, V(sense)<0.1 ? 2e-8+(5e-5-2e-8)*pow(max(V(sense),0)/0.1,2) : V(sense)<1 ? 5e-5*pow(V(sense)/0.1,1.52288) : (1/600)*pow(V(sense),0.79248)))}
+Ccell cell 0 1u IC=20n
+Bcell 0 cell I={(V(target)-V(cell))/(V(target)>V(cell) ? 1k : 15k)}
+Bldr gr sum I={V(gr,sum)*max(V(cell),2e-8)}
+* Makeup stepped gain, effective feedback resistance; 0-ohm position approximated.
+RG mgneg 0 2.2k
+RMAKE make mgneg {max(1m,2200*(pow(10,MAKEUP/20)-1))}
+XU2A gr mgneg op on make OPA134
+XU2B make bufout op on bufout OPA134
+RO bufout out 47
+RL out 0 10k
+* Sidechain source selector.
+Bselect sc 0 V={FF*V(pre)+(1-FF)*V(gr)}
+XU3A sc scbuf op on scbuf OPA134
+* HPF isolation retained; bypass selected without singular resistor values.
+CH scbuf hp 100n
+RH hp 0 {1/(6.283185307*max(HPF,10)*100n)}
+Bhp hpsel 0 V={HPF>0 ? V(hp) : V(scbuf)}
+* Behavioral ideal isolation above pending physical switch/buffer.
+RHF hpsel hfneg 10k
+RFB hfout hfneg 10k
+CFB hfout hfneg 220p
+XU3B 0 hfneg op on hfout OPA134
+* Precision rectifier: half output = -max(input,0).
+RHA hfout ha 4.99k
+RHB half ha 4.99k
+DHA oa ha D4148W
+DHB half oa D4148W
+XU4A 0 ha op on oa OPA134
+RSA hfout sa 9.98k
+RSB half sa 4.99k
+RSF rect sa 9.98k
+XU4B 0 sa op on rect OPA134
+* Average branch.
+RA rect avg 10k
+CA avg 0 100n
+RAG an 0 10k
+RAF avgo an 5.71k
+XAVG avg an op on avgo OPA134
+* Peak branch: active hold with anti-saturation clamp.
+XPK rect pkout op on pkamp OPA134
+DPC pkamp charge D4148W
+RPC charge hold 100
+DCL pkout pkamp D4148W
+CP hold 0 100n
+RP hold 0 47k
+XPKBUF hold pkout op on pkout OPA134
+* Provisional ideal log / threshold / knee / ratio blocks.
+* Absolute threshold reference 1V peak is provisional, not dBFS calibration.
+Bdet det 0 V={RATIO<8 ? max(V(avgo),1e-9) : max(V(pkout),1e-9)}
+Bover over 0 V={20*log10(V(det))+SENS}
+* Input-referred 10dB soft knee; feedback branch width approximation pending.
+Bknee knee 0 V={SENS<=0 ? 0 : SOFT ? (V(over)<-5 ? 0 : V(over)>5 ? V(over) : pow(V(over)+5,2)/20) : max(V(over),0)}
+Bcmd cmd 0 V={min(4,0.1*V(knee)*(FF ? 1-1/RATIO : RATIO-1))}
+* Ideal precision steering surrogate, to replace with active diode network.
+CT timing 0 1u
+BT 0 timing I={(V(cmd)-V(timing))/(V(cmd)>V(timing) ? ATT/1u : REL/1u)}
+XT timing tc op on tc OPA134
+* Inverse static cell curve surrogate; physical shaping network pending.
+Breq req 0 V={max(2e-8,(pow(10,max(V(tc),0))-1)/10000)}
+Bdrive drive 0 V={min(3,max(0,V(req)<5e-5 ? 0.1*sqrt(max(0,(V(req)-2e-8)/(5e-5-2e-8))) : V(req)<1/600 ? 0.1*pow(V(req)/5e-5,1/1.52288) : pow(V(req)*600,1/0.79248)))}
+* Current driver; LED diode model is placeholder pending measured VTL LED model.
+XDRV drive sense op on drv OPA134
+RB drv base 100
+QD ledc base sense Q2N2222A
+RS sense 0 100
+DLED op ledc VTL_LED
+DREV ledc op D4148W
+.model VTL_LED D(IS=1e-16 N=2)
+.op
+.tran 0.5u 200m
+.end
