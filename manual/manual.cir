@@ -44,10 +44,16 @@ CF gr sum 100p
 XU1B 0 sum op on gr OPA134
 * Provisional VTL5C1 conductance state, not validated against dynamic curves.
 * Nominal resistance anchors 1mA=20k, 10mA=600, 40mA=200.
-Btarget target 0 V={min(0.005,max(2e-8, V(sense)<0.1 ? 2e-8+(5e-5-2e-8)*pow(max(V(sense),0)/0.1,2) : V(sense)<1 ? 5e-5*pow(V(sense)/0.1,1.52288) : (1/600)*pow(V(sense),0.79248)))}
+* Guard nonlinear functions at their point of evaluation, including Newton trials.
+.func cs(x) {min(4,max(0,x))}
+.func cg(x) {min(0.005,max(2e-8,x))}
+Btarget target 0 V={cg(ternary_fcn(cs(V(sense))<0.1,2e-8+(5e-5-2e-8)*pow(cs(V(sense))/0.1,2),ternary_fcn(cs(V(sense))<1,5e-5*pow(max(0.1,cs(V(sense)))/0.1,1.52288),(1/600)*pow(max(1,cs(V(sense))),0.79248))))}
 Ccell cell 0 1u IC=20n
-Bcell 0 cell I={(V(target)-V(cell))/(V(target)>V(cell) ? 1k : 5.63k)}
-Bldr gr sum I={V(gr,sum)*max(V(cell),2e-8)}
+* Explicit passive DC path and positive incremental conductance at all times.
+* 5.63k recovery, 1k attack; supplemental current only during charging.
+Rcell target cell 5.63k
+Bcell target cell I={max(V(target,cell),0)*(1/1000-1/5630)}
+Bldr gr sum I={V(gr,sum)*cg(V(cell))}
 * Makeup stepped gain, effective feedback resistance; 0-ohm position approximated.
 RG mgneg 0 2.2k
 RMAKE make mgneg {max(1m,2200*(pow(10,MAKEUP/20)-1))}
@@ -105,7 +111,7 @@ VREF ref 0 3
 RPTOP ref pw {max(0.01,50000*(1-SENS/30))}
 RPBOT pw 0 {max(0.01,50000*SENS/30)}
 XPOT pw pbuf op on pbuf OPA134
-BLOG logv 0 V={2*log10(V(det))}
+BLOG logv 0 V={2*log10(max(1e-9,min(15,V(det))))}
 * Summing amplifier and inverter provide 100mV/dB over-threshold voltage.
 RLOG logv subneg 10k
 RTH pbuf subneg 10k
@@ -114,7 +120,7 @@ XSUB 0 subneg op on subout OPA134
 RINV subout invneg 10k
 RIF ov100 invneg 10k
 XINV 0 invneg op on ov100 OPA134
-Bover over 0 V={10*V(ov100)}
+Bover over 0 V={10*max(-15,min(15,V(ov100)))}
 * Input-referred 10dB soft knee; feedback branch width approximation pending.
 Bknee knee 0 V={SENS<=0 ? 0 : SOFT ? (V(over)<-5 ? 0 : V(over)>5 ? V(over) : pow(V(over)+5,2)/20) : max(V(over),0)}
 * Physical ratio gain network, limited command still provisional.
@@ -125,11 +131,13 @@ XRATIO 0 rrneg op on rrout OPA134
 Bcmd cmd 0 V={min(4,max(0,-V(rrout)))}
 * Ideal precision steering surrogate, to replace with active diode network.
 CT timing 0 1u
-BT 0 timing I={(V(cmd)-V(timing))/(V(cmd)>V(timing) ? ATT/1u : REL/1u)}
+* Permanent physical release resistance plus directional attack correction.
+RTIME cmd timing {REL/1u}
+BT cmd timing I={max(V(cmd,timing),0)*(1u/ATT-1u/REL)}
 XT timing tc op on tc OPA134
 * Inverse static cell curve surrogate; physical shaping network pending.
-Breq req 0 V={max(2e-8,(pow(10,max(V(tc),0))-1)/10000)}
-Bdrive drive 0 V={min(3,max(0,V(req)<5e-5 ? 0.1*sqrt(max(0,(V(req)-2e-8)/(5e-5-2e-8))) : V(req)<1/600 ? 0.1*pow(V(req)/5e-5,1/1.52288) : pow(V(req)*600,1/0.79248)))}
+Breq req 0 V={cg((exp(2.302585092994046*min(4,max(0,V(tc))))-1)/10000)}
+Bdrive drive 0 V={min(3,max(0,ternary_fcn(cg(V(req))<5e-5,0.1*sqrt(max(1e-20,(cg(V(req))-2e-8)/(5e-5-2e-8))),ternary_fcn(cg(V(req))<1/600,0.1*pow(cg(V(req))/5e-5,1/1.52288),pow(cg(V(req))*600,1/0.79248)))))}
 * Current driver; LED diode model is placeholder pending measured VTL LED model.
 XDRV drive sense op on drv OPA134
 RB drv base 100
@@ -137,6 +145,9 @@ QD ledc base sense Q2N2222A
 RS sense 0 100
 DLED op ledc VTL_LED
 DREV ledc op D4148W
+* Prevent reverse B-E stress when the zero-current loop reaches cutoff.
+DBE sense base D4148W
+RBE base sense 100k
 .model VTL_LED D(IS=1e-16 N=2)
 .op
 .tran 0.5u 200m
