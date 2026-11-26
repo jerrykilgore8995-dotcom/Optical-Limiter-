@@ -1,13 +1,10 @@
 name: Manual SPICE Measurements
 on:
-  push:
-    paths:
-      - '.github/workflows/manual-measurements.yml'
   workflow_dispatch:
 jobs:
   measurement:
     name: ${{ matrix.suite }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -16,7 +13,7 @@ jobs:
         suite: [bias, audio, optical, threshold, ripple, timing_1_10, timing_10_100, timing_40_3000, timing_1_3000, timing_40_10, ratio_case_0_0_2, ratio_case_0_0_3, ratio_case_0_0_4, ratio_case_0_0_8, ratio_case_0_0_12, ratio_case_0_0_20, ratio_case_0_1_2, ratio_case_0_1_3, ratio_case_0_1_4, ratio_case_0_1_8, ratio_case_0_1_12, ratio_case_0_1_20, ratio_case_1_0_2, ratio_case_1_0_3, ratio_case_1_0_4, ratio_case_1_0_8, ratio_case_1_0_12, ratio_case_1_0_20, ratio_case_1_1_2, ratio_case_1_1_3, ratio_case_1_1_4, ratio_case_1_1_8, ratio_case_1_1_12, ratio_case_1_1_20]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y ngspice python3-numpy
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
       - name: Execute independent suite
         env:
           SUITE: ${{ matrix.suite }}
