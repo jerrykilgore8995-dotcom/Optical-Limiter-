@@ -1,0 +1,4 @@
+* Source: https://www.diodes.com/spice/download/1589/1N4148W.spice.txt
+* Diodes Incorporated model parameters, local alias D4148W.
+.model D4148W D(IS=10.4n RS=51.5m BV=75.0 IBV=1.00u
++ CJO=2.00p M=0.333 N=2.07 TT=5.76n)
