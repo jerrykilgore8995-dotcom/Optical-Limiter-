@@ -17,12 +17,12 @@ EN im 0 src 0 {-0.5*exp(log(10)*GDB/20)}
 CIN in b {CVAL}
 RB b 0 47k
 * Diode-connected complementary BJT bias string.
-* 7.5k rail resistors provide ~3mA; 47R shifts target emitter current.
+* 7.5k rail resistors provide ~3mA; 39R selected for target emitter current.
 * Tune after authentic model DC operating point; Class A not yet verified.
 RBIASP vp bn 7.5k
 QBN bn bn bnp KSC1845
-RBN bnp b 47
-RBP b bpp 47
+RBN bnp b 39
+RBP b bpp 39
 QBP bp bp bpp KSA992
 RBIASN bp vn 7.5k
 QN vp bn en KSC1845
