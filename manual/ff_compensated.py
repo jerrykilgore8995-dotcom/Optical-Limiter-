@@ -12,20 +12,20 @@ rf=10000*(1-1/ratio)+offset
 variant='stock_peak'
 assert ratio in (2,3,4,8,12,20)
 def fixture(s):
-    old='RRF rrout rrneg {10000*(FF ? 1-1/RATIO : RATIO-1)}'
-    assert old in s
-    # Retain original ratio and timing values.
     if cap:
         s=s.replace('RPKFB pkout pkneg 10k',f'RPKFB pkout pkneg 10k\nCPKFB pkout pkneg {cap}p')
     if audit=='all':
         for resistor,capname,nodes in [
+            ('RHB','CHB','half ha'),
             ('RSF','CSF','rect sa'),
             ('RAF','CAF','avgo an'),
             ('RSUB','CSUB','subout subneg'),
             ('RIF','CIF','ov100 invneg'),
             ('RRF','CRRF','rrout rrneg')]:
-            s=re.sub(r'(?m)^'+resistor+r' .*
-assert ratio in (2,3,4,8,12,20)
+            pattern=r'(?m)^'+resistor+r' [^\n]+'
+            s,n=re.subn(pattern,lambda m:m.group(0)+'\n'+capname+' '+nodes+' 22p',s)
+            assert n==1,resistor
+    return s
 data={}
 def sample(level):
     level=round(float(level),5)
