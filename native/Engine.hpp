@@ -55,34 +55,14 @@ public:
         if (newton(input, inverse, 10)) {
             m.acceptCompanions(false);
         } else {
-            const auto savedInput = lastInput;
             savedCompanions = m.companions;
-            m.v = previous;
-            refinementStart = previous;
-            // Refine only the interval that could not converge. Keep the
-            // accepted substeps and their trapezoidal histories, and roll
-            // the entire host sample back if refinement runs out of budget.
-            constexpr int divisions = 1024;
-            int position = 0;
-            int stride = divisions / 2;
-            constexpr int maxAttempts = 120;
-            for (int attempt = 0; position < divisions && attempt < maxAttempts && stride > 0; ++attempt) {
-                stride = std::min(stride, divisions - position);
-                const double fraction = static_cast<double>(position + stride) / divisions;
-                const double coefficient = inverse * divisions / stride;
-                if (newton(savedInput + delta * fraction, coefficient, 14)) {
-                    m.acceptCompanions(false);
-                    refinementStart = m.v;
-                    position += stride;
-                    stride = std::min(stride * 2, divisions / 2);
-                } else {
-                    m.v = refinementStart;
-                    stride /= 2;
-                }
-            }
-            if (position != divisions) {
-                m.v = previous;
-                m.companions = savedCompanions;
+            // Uniform substeps keep the feedback peak detector's history
+            // consistent across a burst-to-silence transition.
+            const bool solved = settings.ff > .5
+                ? refineAdaptive(delta) || refineUniform(delta)
+                : refineUniform(delta) || refineAdaptive(delta);
+            if (!solved) {
+                restoreSample();
                 ++failures;
                 return voltage(outputNode);
             }
@@ -106,6 +86,54 @@ public:
     int solverOperations() const { return m.matrix.operationCount(); }
 
 private:
+    void restoreSample() {
+        m.v = previous;
+        m.companions = savedCompanions;
+    }
+
+    bool refineUniform(double delta) {
+        for (int steps : {2, 4, 8, 16, 32}) {
+            restoreSample();
+            bool complete = true;
+            for (int i = 1; i <= steps; ++i) {
+                const double fraction = static_cast<double>(i) / steps;
+                if (!newton(lastInput + delta * fraction, inverse * steps, 16)) {
+                    complete = false;
+                    break;
+                }
+                m.acceptCompanions(false);
+            }
+            if (complete) return true;
+        }
+        return false;
+    }
+
+    bool refineAdaptive(double delta) {
+        restoreSample();
+        refinementStart = previous;
+        // Keep each accepted trapezoidal history and refine only the
+        // interval that could not converge.
+        constexpr int divisions = 1024;
+        constexpr int maxAttempts = 120;
+        int position = 0;
+        int stride = divisions / 2;
+        for (int attempt = 0; position < divisions && attempt < maxAttempts && stride > 0; ++attempt) {
+            stride = std::min(stride, divisions - position);
+            const double fraction = static_cast<double>(position + stride) / divisions;
+            const double coefficient = inverse * divisions / stride;
+            if (newton(lastInput + delta * fraction, coefficient, 14)) {
+                m.acceptCompanions(false);
+                refinementStart = m.v;
+                position += stride;
+                stride = std::min(stride * 2, divisions / 2);
+            } else {
+                m.v = refinementStart;
+                stride /= 2;
+            }
+        }
+        return position == divisions;
+    }
+
     void stamp(double input, double coefficient) {
         m.matrix.clear();
         projectBehavior(m, settings);
