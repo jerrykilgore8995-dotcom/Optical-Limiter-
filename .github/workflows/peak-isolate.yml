@@ -1,0 +1,33 @@
+name: Peak Detector Component Isolation
+on:
+  push:
+    paths:
+      - '.github/workflows/peak-isolate.yml'
+  workflow_dispatch:
+jobs:
+  isolate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {variant: stock, precision: normal}
+          - {variant: stock, precision: fine}
+          - {variant: direct, precision: normal}
+          - {variant: direct, precision: fine}
+          - {variant: directnoclamp, precision: normal}
+          - {variant: directfb1k, precision: normal}
+          - {variant: directfb100k, precision: normal}
+          - {variant: directschottky, precision: normal}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/peak_isolate.py
+      - run: /usr/bin/python3 manual/peak_isolate.py isolate_${{ matrix.variant }}_${{ matrix.precision }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: isolate-${{ matrix.variant }}-${{ matrix.precision }}
+          path: manual/measurements/isolate_${{ matrix.variant }}_${{ matrix.precision }}/results.json
+          if-no-files-found: warn
