@@ -51,6 +51,30 @@ inline Jet junction(Jet volts, double emissionVoltage, double saturation) {
     const double exp = junctionExp(limited), slope = saturation*exp/emissionVoltage;
     return {saturation*(exp*(1 + x-limited)-1), slope*volts.p, slope*volts.q};
 }
+inline Jet power(Jet x, double exponent) {
+    const double value = std::pow(x.value, exponent);
+    const double slope = exponent * value / x.value;
+    return {value, slope * x.p, slope * x.q};
+}
+
+inline Jet depletion(Jet voltage, double zero, double potential, double grading, double fc) {
+    if (zero == 0) return {};
+    const double knee = potential * fc;
+    if (voltage.value < knee) {
+        const double x = 1 - voltage.value / potential;
+        const double slope = zero * std::pow(x, -grading);
+        return {potential * (zero - x * slope) / (1 - grading),
+                slope * voltage.p, slope * voltage.q};
+    }
+    const double f = std::pow(1 - fc, -grading);
+    const double offset = voltage.value - knee;
+    const double curvature = f * grading / (potential * (1 - fc));
+    const double slope = zero * (f + offset * curvature);
+    return {potential * zero * (1 - (1 - fc) * f) / (1 - grading)
+                + zero * offset * (f + 0.5 * offset * curvature),
+            slope * voltage.p, slope * voltage.q};
+}
+
 
 template<double exponent>
 const auto junctionPowerTable=[] {
