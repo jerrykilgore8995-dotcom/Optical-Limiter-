@@ -24,12 +24,34 @@ struct MNA {
         residual(a,b,c/dt*(voltage(a)-voltage(b)-previousV));
         derivative(a,b,a,b,c/dt);
     }
+    // Trapezoidal companion with accepted previous voltage and current.
+    void capacitorTrap(int a,int b,double c,double previousV,double previousI,double dt) {
+        const double g=2*c/dt;
+        residual(a,b,g*(voltage(a)-voltage(b)-previousV)-previousI);
+        derivative(a,b,a,b,g);
+    }
+    void charge(int a,int b,Jet q,double previousQ,double previousI,double dt) {
+        residual(a,b,2*(q.value-previousQ)/dt-previousI);
+        derivative(a,b,a,b,2*q.p/dt);
+    }
     void source(int a,int b,int k,double volts) {
         residual(a,b,voltage(k));derivative(a,b,k,-1,1.);
         residual(k,-1,voltage(a)-voltage(b)-volts);derivative(k,-1,a,b,1.);
     }
     void controlled(int a,int b,int p,int n,double gain) {
         residual(a,b,gain*(voltage(p)-voltage(n)));derivative(a,b,p,n,gain);
+    }
+    // Voltage controlled voltage source: branch current plus constraint equation.
+    void vcvs(int a,int b,int k,int p,int n,double gain) {
+        source(a,b,k,gain*(voltage(p)-voltage(n)));
+        derivative(k,-1,p,n,-gain);
+    }
+    void cccs(int a,int b,int k,double gain) {
+        residual(a,b,gain*voltage(k));derivative(a,b,k,-1,gain);
+    }
+    void ccvs(int a,int b,int k,int control,double gain) {
+        source(a,b,k,gain*voltage(control));
+        derivative(k,-1,control,-1,-gain);
     }
     void diode(int a,int b,double is,double n) {
         const auto j=junction({voltage(a)-voltage(b),1,0},n*thermal,is);
