@@ -1,0 +1,297 @@
+#pragma once
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <bit>
+#include <ostream>
+#include <string_view>
+#include <vector>
+
+namespace optical {
+#if __has_include("GeneratedSolve.hpp")
+#include "GeneratedSolve.hpp"
+#endif
+
+// Choose and factor the symbolic pattern at prepareToPlay. The audio thread
+// reuses a fixed elimination schedule with no searches, allocation or fill-in.
+class Sparse {
+public:
+    void resize(int n) {
+        size = n;
+        lookup.assign(n * n, -1);
+        dense.assign(n * n, 0);
+        rhs.assign(n, 0);
+        x.assign(n, 0);
+        ready = false;
+    }
+
+    void add(int row, int column, double value) {
+        if (row < 0 || column < 0) return;
+        const int offset = row * size + column;
+        if (!ready) {
+            lookup[offset] = 0;
+            dense[offset] += value;
+        } else {
+            const int slot = lookup[offset];
+            if (slot >= 0) entries[slot] += value;
+        }
+    }
+
+    bool prepare() {
+        rows.clear();
+        updates.clear();
+        activePivots.clear();
+        std::vector<bool> liveRows(size, true), liveColumns(size, true);
+        for (int step = 0; step < size; ++step) {
+            std::vector<int> rowCount(size, 0), colCount(size, 0);
+            std::vector<double> colMax(size, 0), rowMax(size, 0);
+            for (int row = 0; row < size; ++row) if (liveRows[row]) {
+                for (int col = 0; col < size; ++col) if (liveColumns[col] && has(row,col)) {
+                    ++rowCount[row];
+                    ++colCount[col];
+                    colMax[col] = std::max(colMax[col], std::abs(v(row,col)));
+                    rowMax[row] = std::max(rowMax[row], std::abs(v(row,col)));
+                }
+            }
+            int pr = -1, pc = -1, best = 2*size*size;
+            double tie = -1.0;
+            for (int row = 0; row < size; ++row) if (liveRows[row]) {
+                for (int col = 0; col < size; ++col) if (liveColumns[col] && has(row,col)) {
+                    const double pivot = std::abs(v(row,col));
+                    if (pivot < 1e-17 || pivot < 0.01 * colMax[col]) continue;
+                    // Prefer self-admittances to off-diagonal transistor
+                    // gains which can disappear as the device cuts off.
+                    const int cost = (rowCount[row]-1) * (colCount[col]-1) + (row!=col?size*size:0);
+                    const double scaled = pivot / (rowMax[row] + 1e-30);
+                    if (cost < best || (cost == best && scaled > tie)) {
+                        best = cost;
+                        tie = scaled;
+                        pr = row;
+                        pc = col;
+                    }
+                }
+            }
+            if (pr < 0) return false;
+            liveRows[pr] = liveColumns[pc] = false;
+            Row s{};
+            s.row = pr;
+            s.column = pc;
+            for (int col = 0; col < size; ++col)
+                if (liveColumns[col] && has(pr,col)) s.upper.push_back({col, 0});
+            for (int row = 0; row < size; ++row) {
+                if (!liveRows[row] || !has(row,pc)) continue;
+                s.lower.push_back({row, 0});
+                const double factor = v(row,pc)/v(pr,pc);
+                for (const auto& upper : s.upper) {
+                    lookup[row*size + upper.index] = 0;
+                    v(row,upper.index) -= factor * v(pr,upper.index);
+                }
+            }
+            rows.push_back(std::move(s));
+        }
+        int count = 0;
+        for (auto& slot : lookup) if (slot >= 0) slot = count++;
+        entries.assign(count+1, 0);
+        plan.clear();
+        uppers.clear();
+        lowers.clear();
+        for (auto& row : rows) {
+            const int upperBegin=static_cast<int>(uppers.size());
+            const int lowerBegin=static_cast<int>(lowers.size());
+            for (auto& upper : row.upper) {
+                upper.slot = at(row.row,upper.index);
+                uppers.push_back(upper);
+            }
+            for (auto& lower : row.lower) {
+                lower.slot = at(lower.index,row.column);
+                lowers.push_back(lower);
+                for (const auto& upper : row.upper)
+                    updates.push_back(at(lower.index,upper.index));
+            }
+            plan.push_back({row.row,row.column,at(row.row,row.column),upperBegin,
+                            static_cast<int>(uppers.size()),lowerBegin,static_cast<int>(lowers.size())});
+        }
+        rows.clear();
+        dense.clear();
+        ready = true;
+        return true;
+    }
+
+    void cacheLinearPart(const std::vector<int>& mutableSlots) {
+        std::vector<bool> dynamic(entries.size(),false);
+        for (const int slot : mutableSlots) dynamic[slot]=true;
+        runtime.clear();
+        activeUpdates.clear();
+        int nextUpdate=0;
+        for (const auto& s : plan) {
+            const bool pivotChanges=dynamic[s.pivot];
+            const double reciprocal=pivotChanges?0:1/entries[s.pivot];
+            const int begin=static_cast<int>(runtime.size());
+            for (int j=s.lowerBegin;j<s.lowerEnd;++j) {
+                const auto& row=lowers[j];
+                const bool factorChanges=pivotChanges||dynamic[row.slot];
+                const double factor=factorChanges?0:entries[row.slot]*reciprocal;
+                const int first=static_cast<int>(activeUpdates.size());
+                for (int k=s.upperBegin;k<s.upperEnd;++k) {
+                    const int target=updates[nextUpdate++];
+                    const int source=uppers[k].slot;
+                    if (!factorChanges && !dynamic[source]) entries[target]-=factor*entries[source];
+                    else {
+                        dynamic[target]=true;
+                        activeUpdates.push_back({target,source});
+                    }
+                }
+                runtime.push_back({row.index,row.slot,first,static_cast<int>(activeUpdates.size()),
+                                   factor,factorChanges});
+            }
+            activePivots.push_back({s.row,s.pivot,begin,static_cast<int>(runtime.size()),
+                                    reciprocal,pivotChanges});
+        }
+        fixed=entries;
+        signature=0xcbf29ce484222325ULL;
+        const auto add=[&](std::uint64_t value) {
+            signature^=value;
+            signature*=0x100000001b3ULL;
+        };
+        for (const auto& row : activePivots) {
+            for (int v : {row.row,row.pivot,row.begin,row.end}) add(v);
+            add(row.changes);
+            add(std::bit_cast<std::uint64_t>(row.reciprocal));
+        }
+        for (const auto& row : runtime) {
+            for (int v : {row.index,row.slot,row.first,row.last}) add(v);
+            add(row.changes);
+            add(std::bit_cast<std::uint64_t>(row.factor));
+        }
+        for (const auto& e : activeUpdates) {add(e.index);add(e.slot);}
+        for (const auto& s : plan) {
+            for (int v : {s.row,s.column,s.pivot,s.upperBegin,s.upperEnd}) add(v);
+        }
+        for (const auto& e : uppers) {add(e.index);add(e.slot);}
+#if __has_include("GeneratedSolve.hpp")
+        generated=findGeneratedSolve(signature);
+#endif
+    }
+
+    void startIteration(const std::vector<double>& initial) {
+        std::copy(fixed.begin(),fixed.end(),entries.begin());
+        std::copy(initial.begin(),initial.end(),rhs.begin());
+    }
+
+    void clear() {
+        std::fill(entries.begin(), entries.end(), 0.0);
+        std::fill(rhs.begin(), rhs.end(), 0.0);
+    }
+
+    void emit(std::ostream& code,std::string_view name) const {
+        code<<"inline constexpr std::uint64_t signature_"<<name<<'='<<signature<<"ULL;\n";
+        code<<"inline bool solve_"<<name<<"(double* __restrict a,double* __restrict b,double* __restrict x) {\n";
+        code<<"    double u=0,v=0;\n";
+        for (const auto& s : activePivots) {
+            if (s.changes) {
+                code<<"    u=a["<<s.pivot<<"]; if (std::abs(u)<1e-17 || !std::isfinite(u)) return false; "
+                    <<"u=1/u; a["<<s.pivot<<"]=u;\n";
+            }
+            for (int j=s.begin;j<s.end;++j) {
+                const auto& row=runtime[j];
+                if (row.changes) {
+                    code<<"    v=a["<<row.slot<<"]*";
+                    if (s.changes) code<<"u";
+                    else code<<std::hexfloat<<s.reciprocal<<std::defaultfloat;
+                    code<<";\n";
+                }
+                else if (row.factor == 0) continue;
+                else code<<"    v="<<std::hexfloat<<row.factor<<std::defaultfloat<<";\n";
+                code<<"    b["<<row.index<<"]-=v*b["<<s.row<<"];\n";
+                for (int k=row.first;k<row.last;++k)
+                    code<<"    a["<<activeUpdates[k].index<<"]-=v*a["<<activeUpdates[k].slot<<"];\n";
+            }
+        }
+        for (auto s=plan.rbegin();s!=plan.rend();++s) {
+            code<<"    v=b["<<s->row<<"];\n";
+            for (int k=s->upperBegin;k<s->upperEnd;++k)
+                code<<"    v-=a["<<uppers[k].slot<<"]*x["<<uppers[k].index<<"];\n";
+            const auto& forward=activePivots[static_cast<std::size_t>((s+1).base()-plan.begin())];
+            if (forward.changes) code<<"    x["<<s->column<<"]=v*a["<<s->pivot<<"];\n";
+            else code<<"    x["<<s->column<<"]=v*"<<std::hexfloat<<forward.reciprocal
+                     <<std::defaultfloat<<";\n";
+
+        }
+        code<<"    bool finite=true;\n";
+        code<<"    for (int i=0;i<"<<size<<";++i) finite &= std::isfinite(x[i]);\n";
+        code<<"    return finite;\n}\n";
+    }
+
+    bool solve() {
+#if __has_include("GeneratedSolve.hpp")
+        if (generated) return generated(entries.data(),rhs.data(),x.data());
+#endif
+        const auto* upper=uppers.data();
+        auto* values=entries.data();
+        auto* vector=rhs.data();
+        for (const auto& s : activePivots) {
+            double reciprocal=s.reciprocal;
+            if (s.changes) {
+                const double pivot=values[s.pivot];
+                if (std::abs(pivot)<1e-17 || !std::isfinite(pivot)) return false;
+                reciprocal=1.0/pivot;
+            }
+            values[s.pivot]=reciprocal;
+            const double y=vector[s.row];
+            for (int j=s.begin;j<s.end;++j) {
+                const auto& row=runtime[j];
+                const double factor=row.changes?values[row.slot]*reciprocal:row.factor;
+                vector[row.index]-=factor*y;
+                for (int k=row.first;k<row.last;++k)
+                    values[activeUpdates[k].index]-=factor*values[activeUpdates[k].slot];
+            }
+        }
+        for (auto s=plan.rbegin();s!=plan.rend();++s) {
+            double y=vector[s->row];
+            for (int k=s->upperBegin;k<s->upperEnd;++k)
+                y-=values[upper[k].slot]*x[upper[k].index];
+            x[s->column]=y*values[s->pivot];
+            if (!std::isfinite(x[s->column])) return false;
+        }
+        return true;
+    }
+
+    int slot(int row,int col) const {
+        if (row<0 || col<0) return static_cast<int>(entries.size()-1);
+        const int i=at(row,col);
+        return i<0?static_cast<int>(entries.size()-1):i;
+    }
+    void addSlot(int slot,double value) { entries[slot]+=value; }
+
+    int operationCount() const { return static_cast<int>(activeUpdates.size()); }
+    std::vector<double> rhs, x;
+
+private:
+    struct Terminal { int index, slot; };
+    struct Row {
+        int row, column;
+        std::vector<Terminal> upper, lower;
+    };
+    int at(int row, int col) const { return lookup[row*size+col]; }
+    bool has(int row, int col) const { return at(row,col) >= 0; }
+    double& v(int row, int col) { return dense[row*size+col]; }
+
+    std::uint64_t signature=0;
+#if __has_include("GeneratedSolve.hpp")
+    bool (*generated)(double*,double*,double*)=nullptr;
+#endif
+    int size = 0;
+    bool ready = false;
+    std::vector<int> lookup, updates;
+    std::vector<Row> rows;
+    struct Pivot { int row,column,pivot,upperBegin,upperEnd,lowerBegin,lowerEnd; };
+    std::vector<Pivot> plan;
+    struct ActiveLower { int index,slot,first,last;double factor;bool changes; };
+    struct ActivePivot { int row,pivot,begin,end;double reciprocal;bool changes; };
+    std::vector<ActiveLower> runtime;
+    std::vector<ActivePivot> activePivots;
+    std::vector<Terminal> uppers,lowers,activeUpdates;
+    std::vector<double> dense, entries, fixed;
+};
+}
