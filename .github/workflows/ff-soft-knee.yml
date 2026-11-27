@@ -1,0 +1,26 @@
+name: FF Soft Knee Calibration
+on:
+  push:
+    paths:
+      - '.github/workflows/ff-soft-knee.yml'
+      - 'manual/ff_soft_knee.py'
+  workflow_dispatch:
+jobs:
+  ratio:
+    name: FF soft ${{ matrix.ratio }} to 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        ratio: [2,3,4,8,12,20]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/ff_soft_knee.py
+      - run: /usr/bin/python3 manual/ff_soft_knee.py soft_${{ matrix.ratio }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ff-soft-${{ matrix.ratio }}
+          path: manual/measurements/soft_${{ matrix.ratio }}/results.json
