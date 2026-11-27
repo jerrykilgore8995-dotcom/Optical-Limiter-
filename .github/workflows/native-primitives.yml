@@ -1,0 +1,14 @@
+name: Native MNA Primitives
+on:
+  push:
+    paths:
+      - 'native/**'
+      - '.github/workflows/native-primitives.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: g++ -std=c++20 -O2 -Wall -Wextra native/PrimitiveTest.cpp -o primitive-test
+      - run: ./primitive-test
