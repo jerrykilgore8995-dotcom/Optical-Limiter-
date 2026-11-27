@@ -1,0 +1,27 @@
+name: FB Hard and Soft Knee Survey
+on:
+  push:
+    paths:
+      - '.github/workflows/fb-quick.yml'
+      - 'manual/fb_quick.py'
+  workflow_dispatch:
+jobs:
+  survey:
+    name: FB ${{ matrix.mode }} ${{ matrix.ratio }} to 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [hard,soft]
+        ratio: [2,3,4,8,12,20]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/fb_quick.py
+      - run: /usr/bin/python3 manual/fb_quick.py fb_${{ matrix.mode }}_${{ matrix.ratio }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fb-${{ matrix.mode }}-${{ matrix.ratio }}
+          path: manual/measurements/fb_${{ matrix.mode }}_${{ matrix.ratio }}/results.json
