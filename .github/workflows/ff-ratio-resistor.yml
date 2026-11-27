@@ -1,0 +1,28 @@
+name: FF High Ratio Resistor Calibration
+on:
+  push:
+    paths:
+      - '.github/workflows/ff-ratio-resistor.yml'
+  workflow_dispatch:
+jobs:
+  sweep:
+    name: FF ${{ matrix.ratio }} to 1 offset ${{ matrix.offset }} ohm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 15
+      matrix:
+        ratio: [8, 12, 20]
+        offset: [-100, -50, 0, 50, 100]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/ff_ratio_resistor.py
+      - run: /usr/bin/python3 manual/ff_ratio_resistor.py rf_${{ matrix.ratio }}_${{ matrix.offset }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rf-${{ matrix.ratio }}-${{ matrix.offset }}
+          path: manual/measurements/rf_${{ matrix.ratio }}_${{ matrix.offset }}/results.json
+          if-no-files-found: warn
