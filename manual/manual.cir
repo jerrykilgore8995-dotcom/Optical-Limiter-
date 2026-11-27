@@ -59,7 +59,11 @@ RG mgneg 0 2.2k
 RMAKE make mgneg {max(1m,2200*(pow(10,MAKEUP/20)-1))}
 XU2A gr mgneg op on make OPA134
 XU2B make bufout op on bufout OPA134
-RO bufout out 47
+* Locked AC-coupled active output; effective single-ended termination.
+* Cold leg omitted: no external common-mode interference in plugin.
+COUT bufout outcap 47u
+ROBLEED outcap 0 20k
+RO outcap out 47
 RL out 0 10k
 * Sidechain source selector.
 Bselect sc 0 V={FF*V(pre)+(1-FF)*V(gr)}
