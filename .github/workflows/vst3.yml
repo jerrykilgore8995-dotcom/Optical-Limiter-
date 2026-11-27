@@ -3,17 +3,42 @@ on:
   push:
     paths:
       - 'plugin/**'
+      - 'native/**'
       - 'CMakeLists.txt'
+      - 'manual/manual.cir'
+      - 'stage1/models/**'
+      - '.github/workflows/vst3.yml'
   workflow_dispatch:
 
+concurrency:
+  group: optical-vst3-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  operating-point:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ngspice
+      - run: python3 native/seed_deck.py operating-point.raw
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optical-operating-point
+          path: operating-point.raw
+          if-no-files-found: error
+
   windows:
+    needs: operating-point
     runs-on: windows-2022
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: optical-operating-point
+          path: seed
       - name: Configure the x64 build
-        run: cmake -S . -B build -A x64
+        run: cmake -S . -B build -A x64 -DOPTICAL_SPICE_SEED="$PWD/seed/operating-point.raw"
       - name: Build VST3 and tests
         run: cmake --build build --config Release --target OpticalLimiter_VST3 OpticalEngineTest OpticalVst3Test --parallel 4
       - name: Verify dynamics and load the VST3 in a test host
