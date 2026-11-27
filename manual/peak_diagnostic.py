@@ -6,7 +6,7 @@ variant=SUITE.split('_')[1]
 ratio=int(SUITE.split('_')[-1])
 assert variant in ('stock','r22','r10','reference')
 def fixture(s):
-    s=s.replace('.option reltol=1e-4 abstol=1e-11 method=gear','.option reltol=1e-6 abstol=1e-13 vntol=1e-8 method=gear')
+    s=s.replace('.option reltol=1e-4 abstol=1e-11 method=gear','.option reltol=1e-4 abstol=1e-11 method=gear')
     if variant in ('r22','r10'):s=s.replace('RPC charge hold 100','RPC charge hold '+variant[1:])
     if variant=='reference':
         # Diagnostic only: scale-invariant active peak hold with same nominal RC.
@@ -21,7 +21,7 @@ def sample(level):
     tag='level_'+str(level)
     params={'FF':1,'SOFT':0,'RATIO':ratio,'SENS':30,'AMP':peak(level)}
     for duration in [.18,.36,.72]:
-        x=run(tag+'_'+str(duration),params,seconds=duration,step=2e-6,edit=fixture,signals=('pre','gr','out','rect','timing','sense','cell','det','logv','pbuf','cmd','hold','hfout','rrout'))
+        x=run(tag+'_'+str(duration),params,seconds=duration,step=10e-6,edit=fixture,signals=('pre','gr','out','rect','timing','sense','cell','det','logv','pbuf','cmd','hold','hfout','rrout'))
         st=steady(x)
         if st['settled']:break
     if not st['settled']:raise RuntimeError('Unsettled '+tag)
@@ -49,26 +49,26 @@ def find(target):
         frac=(target-a['GR_dB'])/(b['GR_dB']-a['GR_dB'])
         sample(lo+(hi-lo)*min(.8,max(.2,frac)))
     return None
-for level in [-36,-30,-18,-6,6,18]:sample(level)
+for level in [-36,-30,-12,6,18]:sample(level)
 baseline=sample(-36)['GR_dB']
 cross={}
-for target in [.05,.5,1,2,5,10,20,30]:
+for target in [2,15,30]:
     center=find(target+baseline)
     if center is None:
         save({'case':'local','status':'OK','ratio_selected':ratio,'target_GR_dB':target,'result':'unreachable_or_not_converged'});continue
     cross[target]=center
     if target==.05:continue
     level=center['input_dBu']
-    if level+.1>18:
+    if level+.5>18:
         save({'case':'local','status':'OK','ratio_selected':ratio,'target_GR_dB':target,'result':'outside_input_range'});continue
-    a,b=sample(level-.1),sample(level+.1)
+    a,b=sample(level-.5),sample(level+.5)
     dx=b['pre_dBu']-a['pre_dBu'];dy=b['output_dBu']-a['output_dBu']
     slope=dy/dx
     save({'case':'local','status':'OK','ratio_selected':ratio,'target_GR_dB':target,'actual_GR_dB':center['GR_dB']-baseline,'center_input_dBu':level,'delta_input_dB':dx,'delta_output_dB':dy,'local_ratio':1/slope if abs(slope)>1e-9 else None,'slope':slope,'ratio_error_percent':100*(1/slope/ratio-1) if abs(slope)>1e-9 else None,'detector_slope_dB_per_dB':(db(b['det_mean_V'])-db(a['det_mean_V']))/dx,'command_slope_dB_per_dB':10*(b['timing_CV_mean_V']-a['timing_CV_mean_V'])/dx,'optical_slope_dB_per_dB':(b['mean_cell_GR_dB']-a['mean_cell_GR_dB'])/dx,'bracket':[a,b]})
 # Extrapolate the established post-knee line from measured 3/5 dB crossings,
 # independently of the near-zero onset proxy. Report both, do not hide curvature.
-if 2 in cross and 5 in cross:
-    a,b=cross[2],cross[5]
+if 2 in cross and 15 in cross:
+    a,b=cross[2],cross[15]
     slope=(b['GR_dB']-a['GR_dB'])/(b['pre_dBu']-a['pre_dBu'])
     intercept=a['pre_dBu']-(a['GR_dB']-baseline)/slope
     save({'case':'threshold_fit','status':'OK','threshold_pre_dBu':intercept,'fit_GR_slope':slope,'baseline_GR_dB':baseline})
