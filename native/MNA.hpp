@@ -53,6 +53,18 @@ struct MNA {
         source(a,b,k,gain*voltage(control));
         derivative(k,-1,control,-1,-gain);
     }
+    template<class F> void behavior(int a,int b,int k,std::initializer_list<int> refs,F fn) {
+        auto w=[&](int n){return voltage(n);};
+        const double value=fn(w);
+        if(k>=0)source(a,b,k,value);else residual(a,b,value);
+        for(int n:refs) {
+            const double h=1e-7*std::max(1.,std::abs(voltage(n)));
+            auto hi=[&](int p){return voltage(p)+(p==n?h:0.);};
+            auto lo=[&](int p){return voltage(p)-(p==n?h:0.);};
+            const double g=(fn(hi)-fn(lo))/(2*h);
+            if(k>=0)derivative(k,-1,n,-1,-g);else derivative(a,b,n,-1,g);
+        }
+    }
     void diode(int a,int b,double is,double n) {
         const auto j=junction({voltage(a)-voltage(b),1,0},n*thermal,is);
         residual(a,b,j.value+1e-12*(voltage(a)-voltage(b)));
