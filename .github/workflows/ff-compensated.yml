@@ -9,6 +9,7 @@ jobs:
     name: FF ${{ matrix.ratio }} to 1 ${{ matrix.audit }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    # Re-run corrected fixture including half-wave feedback compensation.
     strategy:
       fail-fast: false
       matrix:
