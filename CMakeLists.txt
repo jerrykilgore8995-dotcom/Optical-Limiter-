@@ -54,16 +54,18 @@ if(OPTICAL_BUILD_PLUGIN)
     target_include_directories(OpticalLimiter PRIVATE "${generated}" native)
     target_compile_features(OpticalLimiter PRIVATE cxx_std_20)
     target_compile_definitions(OpticalLimiter PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
-                                                      JUCE_VST3_CAN_REPLACE_VST2=0)
+                                                      JUCE_VST3_CAN_REPLACE_VST2=0 NOMINMAX)
     target_link_libraries(OpticalLimiter PRIVATE juce::juce_audio_processors
-                          juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+                          juce::juce_recommended_config_flags)
 
     if(BUILD_TESTING)
         juce_add_console_app(OpticalVst3Test)
-        target_sources(OpticalVst3Test PRIVATE plugin/Vst3Test.cpp)
+        target_sources(OpticalVst3Test PRIVATE plugin/Vst3Test.cpp plugin/Plugin.cpp)
+        add_dependencies(OpticalVst3Test OpticalCircuitDeck)
+        target_include_directories(OpticalVst3Test PRIVATE "${generated}" native)
         target_compile_features(OpticalVst3Test PRIVATE cxx_std_20)
         target_compile_definitions(OpticalVst3Test PRIVATE JUCE_PLUGINHOST_VST3=1
-                                                         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+                                                         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 NOMINMAX)
         target_link_libraries(OpticalVst3Test PRIVATE juce::juce_audio_processors
                               juce::juce_recommended_config_flags)
     endif()
