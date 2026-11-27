@@ -1,0 +1,28 @@
+name: Peak Feedback Capacitor Sweep
+on:
+  push:
+    paths:
+      - '.github/workflows/peak-capacitance.yml'
+  workflow_dispatch:
+jobs:
+  sweep:
+    name: Rf ${{ matrix.rf }} Cf ${{ matrix.cf }} diode ${{ matrix.diode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        rf: [10000]
+        cf: [0, 100, 220, 470]
+        diode: [stock]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/peak_compensation.py
+      - run: /usr/bin/python3 manual/peak_compensation.py comp_${{ matrix.rf }}_${{ matrix.cf }}_${{ matrix.diode }}_fine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: comp-${{ matrix.rf }}-${{ matrix.cf }}-${{ matrix.diode }}
+          path: manual/measurements/comp_${{ matrix.rf }}_${{ matrix.cf }}_${{ matrix.diode }}_fine/results.json
+          if-no-files-found: warn
