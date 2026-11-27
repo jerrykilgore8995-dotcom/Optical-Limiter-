@@ -135,8 +135,9 @@ CT timing 0 1u
 RTIME cmd timing {REL/1u}
 BT cmd timing I={max(V(cmd,timing),0)*(1u/ATT-1u/REL)}
 XT timing tc op on tc OPA134
-* Inverse static cell curve surrogate; physical shaping network pending.
-Breq req 0 V={cg((exp(2.302585092994046*min(4,max(0,V(tc))))-1)/10000)}
+* Inverse static cell curve surrogate; 100mV/dB command: ln(10)/2 per volt.
+* Physical shaping network pending.
+Breq req 0 V={cg((exp(1.151292546497023*min(4,max(0,V(tc))))-1)/10000)}
 Bdrive drive 0 V={min(3,max(0,ternary_fcn(cg(V(req))<5e-5,0.1*sqrt(max(1e-20,(cg(V(req))-2e-8)/(5e-5-2e-8))),ternary_fcn(cg(V(req))<1/600,0.1*pow(cg(V(req))/5e-5,1/1.52288),pow(cg(V(req))*600,1/0.79248)))))}
 * Current driver; LED diode model is placeholder pending measured VTL LED model.
 XDRV drive sense op on drv OPA134
