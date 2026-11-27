@@ -24,18 +24,26 @@ def db(value):
 def steady(wave, frequency):
     cycles = max(2, min(20, int(wave[-1, 0] * frequency / 3)))
     period = cycles / frequency
-    t = wave[-1, 0] - period + np.arange(2048) * period / 2048
-    output = [np.interp(t, wave[:, 0], wave[:, i]) for i in range(1, 4)]
-    basis = np.exp(-2j * np.pi * frequency * t)
-    fundamental = [2 * np.mean(s * basis) for s in output]
+    # Fit at the original sample times. Reinterpolating the native wave
+    # onto a finer grid would attenuate high-frequency tones and harmonics.
+    t = wave[:, 0]
+    boundary = (t[1:] + t[:-1]) * .5
+    left = np.maximum(np.r_[t[0], boundary], t[-1] - period)
+    right = np.r_[boundary, t[-1]]
+    mask = right > left
+    weight = np.sqrt(right[mask] - left[mask])
     harmonic_count = min(20, int((RATE / 2 - 1) / frequency))
-    harmonics = [2 * np.mean(output[2] * basis ** k) for k in range(2, harmonic_count + 1)]
+    angle = 2 * np.pi * frequency * t[mask, None] * np.arange(1, harmonic_count + 1)
+    design = np.column_stack((np.ones(len(weight)), np.cos(angle), np.sin(angle)))
+    fitted = np.linalg.lstsq(design * weight[:, None], wave[mask, 1:4] * weight[:, None], rcond=None)[0]
+    phasors = fitted[1:1 + harmonic_count] - 1j * fitted[1 + harmonic_count:]
+    fundamental = phasors[0]
     return {
-        'pre_peak_V': abs(fundamental[0]),
-        'output_peak_V': abs(fundamental[2]),
-        'gain_reduction_dB': db(abs(fundamental[0]) / max(abs(fundamental[1]), 1e-30)),
+        'pre_peak_V': float(abs(fundamental[0])),
+        'output_peak_V': float(abs(fundamental[2])),
+        'gain_reduction_dB': float(db(abs(fundamental[0]) / max(abs(fundamental[1]), 1e-30))),
         'phase_deg': float(np.angle(fundamental[2] / fundamental[0], deg=True)),
-        'thd_percent': 100 * np.linalg.norm(harmonics) / max(abs(fundamental[2]), 1e-30),
+        'thd_percent': float(100 * np.linalg.norm(phasors[1:, 2]) / max(abs(fundamental[2]), 1e-30)),
     }
 
 
