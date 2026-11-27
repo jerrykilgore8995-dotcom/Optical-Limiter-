@@ -1,5 +1,6 @@
 """Compare the locked deck and the native solve at identical input and settings."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import os
@@ -73,6 +74,7 @@ def main():
     args.add_argument('native_executable', type=Path)
     args.add_argument('output', type=Path)
     args.add_argument('--short', action='store_true', help='Limit the run to one drive level per mode and detector')
+    args.add_argument('--jobs', default=1, type=int, help='Independent cases to run concurrently')
     options = args.parse_args()
     exe = options.native_executable.resolve()
     rows = []
@@ -84,7 +86,8 @@ def main():
         cases += [(1, 0, 4, 0, level, frequency)
                   for frequency in (100, 1000, 5000, 10000)
                   for level in (-18, -12, -8, -4, 0, 4, 8, 12, 18)]
-    for ff, soft, ratio, sens, level, frequency in cases:
+    def compare(case):
+        ff, soft, ratio, sens, level, frequency = case
         seconds = .22
         with tempfile.TemporaryDirectory() as directory:
             reference = spice_case(ff, soft, ratio, sens, level, seconds, frequency, Path(directory))
@@ -99,14 +102,18 @@ def main():
             row['native'] = native
             row['output_gain_error_dB'] = db(native['output_peak_V'] / reference['output_peak_V'])
             row['gain_reduction_error_dB'] = native['gain_reduction_dB'] - reference['gain_reduction_dB']
-            row['within_5_percent'] = result.returncode == 0 and abs(
+            row['within_5_percent'] = bool(result.returncode == 0 and abs(
                 native['output_peak_V'] / reference['output_peak_V'] - 1) <= .05 and abs(
-                row['gain_reduction_error_dB']) <= max(.10, abs(reference['gain_reduction_dB']) * .05)
+                row['gain_reduction_error_dB']) <= max(.10, abs(reference['gain_reduction_dB']) * .05))
         else:
             row['within_5_percent'] = False
-        rows.append(row)
-        options.output.write_text(json.dumps(rows, indent=2, allow_nan=False) + '\n')
-        print(json.dumps(row, allow_nan=False), flush=True)
+        return row
+
+    with ThreadPoolExecutor(max_workers=options.jobs) as workers:
+        for row in workers.map(compare, cases):
+            rows.append(row)
+            options.output.write_text(json.dumps(rows, indent=2, allow_nan=False) + '\n')
+            print(json.dumps(row, allow_nan=False), flush=True)
     return 0 if all(r['within_5_percent'] for r in rows) else 1
 
 
