@@ -32,6 +32,11 @@ if(BUILD_TESTING)
     target_include_directories(OpticalEngineTest PRIVATE "${generated}" native)
     target_compile_features(OpticalEngineTest PRIVATE cxx_std_20)
     add_test(NAME optical-engine COMMAND OpticalEngineTest 1 1 4 15 -8 .02 44100)
+    foreach(frequency IN ITEMS 5000 10000)
+        add_test(NAME optical-through-${frequency}Hz
+                 COMMAND OpticalEngineTest 1 0 4 0 4 .036 44100 ${frequency})
+        set_tests_properties(optical-through-${frequency}Hz PROPERTIES TIMEOUT 90)
+    endforeach()
 endif()
 
 if(OPTICAL_BUILD_PLUGIN)
