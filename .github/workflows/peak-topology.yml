@@ -1,0 +1,25 @@
+name: Peak Detector Topology Validation
+on:
+  push:
+    paths:
+      - '.github/workflows/peak-topology.yml'
+  workflow_dispatch:
+jobs:
+  topology:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [stock, single, singlelocal, local100, local220, local470, iso220, iso470, iso1000]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/peak_topology.py
+      - run: /usr/bin/python3 manual/peak_topology.py topology_${{ matrix.variant }}_fine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: topology-${{ matrix.variant }}
+          path: manual/measurements/topology_${{ matrix.variant }}_fine/results.json
+          if-no-files-found: warn
