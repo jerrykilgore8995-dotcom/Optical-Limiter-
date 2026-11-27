@@ -1,0 +1,28 @@
+name: FF High Ratio Peak Diagnostic
+on:
+  push:
+    paths:
+      - '.github/workflows/peak-diagnostic.yml'
+  workflow_dispatch:
+jobs:
+  ratio:
+    name: ${{ matrix.variant }} FF hard ${{ matrix.ratio }} to 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        variant: [stock, r22, r10, reference]
+        ratio: [8, 12, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/peak_diagnostic.py
+      - run: /usr/bin/python3 manual/peak_diagnostic.py peak_${{ matrix.variant }}_${{ matrix.ratio }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peak-${{ matrix.variant }}-${{ matrix.ratio }}
+          path: manual/measurements/peak_${{ matrix.variant }}_${{ matrix.ratio }}/results.json
+          if-no-files-found: warn
