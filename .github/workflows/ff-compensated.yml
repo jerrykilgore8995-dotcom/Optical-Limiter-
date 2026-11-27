@@ -1,0 +1,34 @@
+name: FF Compensated Sidechain Validation
+on:
+  push:
+    paths:
+      - '.github/workflows/ff-compensated.yml'
+  workflow_dispatch:
+jobs:
+  ratio:
+    name: FF ${{ matrix.ratio }} to 1 ${{ matrix.audit }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {ratio: 8, cap: 680, audit: peakonly}
+          - {ratio: 12, cap: 680, audit: peakonly}
+          - {ratio: 20, cap: 680, audit: peakonly}
+          - {ratio: 2, cap: 680, audit: all}
+          - {ratio: 3, cap: 680, audit: all}
+          - {ratio: 4, cap: 680, audit: all}
+          - {ratio: 8, cap: 680, audit: all}
+          - {ratio: 12, cap: 680, audit: all}
+          - {ratio: 20, cap: 680, audit: all}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/ff_compensated.py
+      - run: /usr/bin/python3 manual/ff_compensated.py compensated_${{ matrix.ratio }}_${{ matrix.cap }}_${{ matrix.audit }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compensated-${{ matrix.ratio }}-${{ matrix.audit }}
+          path: manual/measurements/compensated_${{ matrix.ratio }}_${{ matrix.cap }}_${{ matrix.audit }}/results.json
