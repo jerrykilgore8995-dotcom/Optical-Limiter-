@@ -294,15 +294,15 @@ public:
         for (std::size_t i = 0; i < dials.size(); ++i)
             paintDial(g, dials[i], knobs[i]);
 
-        paintMeter(g, 399, reduction[0], "LEFT");
-        paintMeter(g, 605, reduction[1], "RIGHT");
+        paintMeter(g, 399, processor.meters[0].load(std::memory_order_relaxed), "LEFT");
+        paintMeter(g, 605, processor.meters[1].load(std::memory_order_relaxed), "RIGHT");
         for (std::size_t i = 0; i < selectors.size(); ++i) {
             const auto& s = selectors[i];
             label(g, s.caption, {s.x, s.y - 14, i == 1 ? 132 : 100, 12}, 9.f, brass, juce::Font::bold);
         }
         label(g, "SIGNAL PATH", {654, 185, 148, 12}, 9.f, brass, juce::Font::bold);
         g.setColour(processor.status.load(std::memory_order_relaxed) ? Colour{0xffacde91} : Colour{0xff94524b});
-        g.fillEllipse(785.f, 206.f, 6.f, 6.f);
+        g.fillEllipse(785.f, 188.f, 6.f, 6.f);
     }
 
 private:
@@ -445,10 +445,8 @@ private:
     }
 
     void timerCallback() override {
-        for (std::size_t ch = 0; ch < reduction.size(); ++ch)
-            reduction[ch] = processor.meters[ch].load(std::memory_order_relaxed);
         repaint(394, 50, 412, 124);
-        repaint(779, 200, 19, 18);
+        repaint(779, 183, 19, 15);
     }
 
     Processor& processor;
@@ -460,7 +458,6 @@ private:
     std::array<std::unique_ptr<State::SliderAttachment>, dials.size()> bindings;
     std::array<std::unique_ptr<State::ComboBoxAttachment>, 3> selectorBindings;
     std::unique_ptr<State::ButtonAttachment> bypassBinding;
-    std::array<float, 2> reduction{};
 };
 
 juce::AudioProcessorEditor* Processor::createEditor() { return new Panel(*this); }
