@@ -1,0 +1,29 @@
+name: Manual Calibration - Ratio and Bass
+on:
+  push:
+    paths:
+      - '.github/workflows/manual-calibration.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        suite: [cap_1, cap_2.2, cap_4.7, target_0_0_2, target_0_0_3, target_0_0_4, target_0_0_8, target_0_0_12, target_0_0_20, target_0_1_2, target_0_1_3, target_0_1_4, target_0_1_8, target_0_1_12, target_0_1_20, target_1_0_2, target_1_0_3, target_1_0_4, target_1_0_8, target_1_0_12, target_1_0_20, target_1_1_2, target_1_1_3, target_1_1_4, target_1_1_8, target_1_1_12, target_1_1_20]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 manual/diagnose.py "${{ matrix.suite }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calibration-${{ matrix.suite }}
+          path: |
+            manual/measurements/${{ matrix.suite }}/**/results.json
+            manual/measurements/${{ matrix.suite }}/**/case.cir
+            manual/measurements/${{ matrix.suite }}/**/ngspice.log
+          if-no-files-found: warn
