@@ -1,0 +1,23 @@
+name: Tune FF Hard 8 to 1
+on:
+  push:
+    paths:
+      - '.github/workflows/tune-ff-8.yml'
+  workflow_dispatch:
+jobs:
+  tune:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 -m py_compile manual/tune_ff_ratio.py manual/ff_ratio_resistor.py
+      - run: /usr/bin/python3 manual/tune_ff_ratio.py 8
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ff-8-tuning
+          path: |
+            manual/measurements/tune_8/*.json
+            manual/measurements/rf_8_*/results.json
+          if-no-files-found: warn
