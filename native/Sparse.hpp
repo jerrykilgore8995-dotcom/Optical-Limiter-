@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <bit>
+#include <limits>
 #include <ostream>
 #include <string_view>
 #include <vector>
@@ -65,7 +66,7 @@ public:
                     rowMax[row] = std::max(rowMax[row], std::abs(v(row,col)));
                 }
             }
-            int pr = -1, pc = -1, best = 2*size*size;
+            int pr = -1, pc = -1, best = std::numeric_limits<int>::max();
             double tie = -1.0;
             for (int row = 0; row < size; ++row) if (liveRows[row]) {
                 for (int col = 0; col < size; ++col) if (liveColumns[col] && has(row,col)) {
@@ -254,7 +255,7 @@ public:
             double reciprocal=s.reciprocal;
             if (s.changes) {
                 const double pivot=values[s.pivot];
-                if (std::abs(pivot)<1e-17 || !std::isfinite(pivot)) { failedPivot=s.row; return false; }
+                if (std::abs(pivot)<1e-17 || !std::isfinite(pivot)) return false;
                 reciprocal=1.0/pivot;
             }
             values[s.pivot]=reciprocal;
@@ -354,7 +355,6 @@ public:
 
     int operationCount() const { return static_cast<int>(activeUpdates.size()); }
     std::vector<double> rhs, x;
-    int failedPivot=-1;
 
 private:
     struct Terminal { int index, slot; };
