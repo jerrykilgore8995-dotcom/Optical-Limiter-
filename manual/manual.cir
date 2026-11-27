@@ -30,8 +30,9 @@ QP vn bp ep KSA992
 REN en out 47
 REP ep out 47
 .ends leg
-XP ip p vp vn leg CVAL=1.005u
-XM im m vp vn leg CVAL=.995u
+* Locked 4.7uF input film pair, 1% total matching spread.
+XP ip p vp vn leg CVAL=4.7235u
+XM im m vp vn leg CVAL=4.6765u
 * Reverse receiver polarity to cancel optical amplifier inversion.
 R1 p neg 4.99k
 R2 pre neg 4.99k
