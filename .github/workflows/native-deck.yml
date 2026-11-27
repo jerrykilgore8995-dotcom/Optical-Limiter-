@@ -12,7 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 native/flatten_deck.py
+      - run: python3 native/audit_deck.py
       - uses: actions/upload-artifact@v4
         with:
-          name: native-circuit-ir
-          path: native/deck.json
+          name: native-circuit-ir-and-audit
+          path: |
+            native/deck.json
+            native/audit.json
