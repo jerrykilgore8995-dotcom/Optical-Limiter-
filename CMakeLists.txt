@@ -37,6 +37,9 @@ if(BUILD_TESTING)
                  COMMAND OpticalEngineTest 1 0 4 0 4 .036 44100 ${frequency})
         set_tests_properties(optical-through-${frequency}Hz PROPERTIES TIMEOUT 90)
     endforeach()
+    add_test(NAME optical-feedback-release
+             COMMAND OpticalEngineTest 0 0 12 30 -20.10409 .415 44100 1000 burst)
+    set_tests_properties(optical-feedback-release PROPERTIES TIMEOUT 120)
 endif()
 
 if(OPTICAL_BUILD_PLUGIN)
