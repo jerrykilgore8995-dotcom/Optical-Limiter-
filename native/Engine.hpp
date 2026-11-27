@@ -17,7 +17,7 @@ public:
         inverse = 2 * sampleRate;
         m = MNA(unknownCount, fixedCount);
         std::copy(dcBias.begin(), dcBias.end(), m.v.begin());
-        previous = older = trialStart = m.v;
+        previous = older = trialStart = refinementStart = m.v;
         settings = {};
         lastInput = lastDelta = 0;
         failures = refined = 0;
@@ -57,22 +57,30 @@ public:
         } else {
             const auto savedInput = lastInput;
             savedCompanions = m.companions;
-            bool complete = false;
-            for (int part : {2, 4, 8, 16, 32}) {
-                m.v = previous;
-                m.companions = savedCompanions;
-                complete = true;
-                for (int i = 1; i <= part; ++i) {
-                    const double fraction = static_cast<double>(i) / part;
-                    if (!newton(savedInput + delta * fraction, inverse * part, 16)) {
-                        complete = false;
-                        break;
-                    }
+            m.v = previous;
+            refinementStart = previous;
+            // Refine only the interval that could not converge. Keep the
+            // accepted substeps and their trapezoidal histories, and roll
+            // the entire host sample back if refinement runs out of budget.
+            constexpr int divisions = 1024;
+            int position = 0;
+            int stride = divisions / 2;
+            constexpr int maxAttempts = 120;
+            for (int attempt = 0; position < divisions && attempt < maxAttempts && stride > 0; ++attempt) {
+                stride = std::min(stride, divisions - position);
+                const double fraction = static_cast<double>(position + stride) / divisions;
+                const double coefficient = inverse * divisions / stride;
+                if (newton(savedInput + delta * fraction, coefficient, 14)) {
                     m.acceptCompanions(false);
+                    refinementStart = m.v;
+                    position += stride;
+                    stride = std::min(stride * 2, divisions / 2);
+                } else {
+                    m.v = refinementStart;
+                    stride /= 2;
                 }
-                if (complete) break;
             }
-            if (!complete) {
+            if (position != divisions) {
                 m.v = previous;
                 m.companions = savedCompanions;
                 ++failures;
@@ -145,7 +153,7 @@ private:
 
     MNA m{unknownCount, fixedCount};
     Settings settings;
-    std::vector<double> previous, older, trialStart;
+    std::vector<double> previous, older, trialStart, refinementStart;
     std::vector<MNA::Companion> savedCompanions;
     double inverse = 0, lastInput = 0, lastDelta = 0;
     double lastError = 0;
