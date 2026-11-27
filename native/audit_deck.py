@@ -10,7 +10,9 @@ assert set(counts)<=required, set(counts)-required
 assert counts['q']>=8 and counts['d']>=90 and counts['j']>=30
 assert counts['b']==14 and counts['s']==2
 assert len(d['models'])>=40
-assert any('OPA2134' in k.upper() for k in d['models'])
+assert sum(k.endswith('.xcore.jx') for k in d['models'])==18
+assert sum(k.endswith('.xcore.dx') for k in d['models'])==18
+assert sum(x['kind']=='j' and '.xcore.' in x['name'] for x in d['devices'])==36
 assert any('KSC1845' in k.upper() for k in d['models'])
 assert any('KSA992' in k.upper() for k in d['models'])
 assert any('D4148W' in k.upper() for k in d['models'])
