@@ -1,0 +1,19 @@
+name: Peak 680pF Validation
+on:
+  push:
+    paths:
+      - '.github/workflows/peak-680pf.yml'
+  workflow_dispatch:
+jobs:
+  isolate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y ngspice python3-numpy
+      - run: /usr/bin/python3 manual/peak_compensation.py comp_10000_680_stock_fine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peak-680pf
+          path: manual/measurements/comp_10000_680_stock_fine/results.json
