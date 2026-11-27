@@ -5,10 +5,11 @@
 #include <iomanip>
 #include <iostream>
 #include <numbers>
+#include <string_view>
 
 int main(int argc, char** argv) {
-    if (argc != 8 && argc != 9) {
-        std::cerr << "Usage: OpticalEngineTest FF soft ratio sensitivity input_dBu seconds sample_rate [frequency]\n";
+    if (argc < 8 || argc > 10 || (argc == 10 && std::string_view(argv[9]) != "burst")) {
+        std::cerr << "Usage: OpticalEngineTest FF soft ratio sensitivity input_dBu seconds sample_rate [frequency] [burst]\n";
         return 2;
     }
     optical::Settings s;
@@ -19,7 +20,8 @@ int main(int argc, char** argv) {
     const double amplitude = std::sqrt(2.) * .775 * std::pow(10., std::atof(argv[5]) / 20.);
     const double seconds = std::atof(argv[6]);
     const double rate = std::atof(argv[7]);
-    const double frequency = argc == 9 ? std::atof(argv[8]) : 1000;
+    const double frequency = argc >= 9 ? std::atof(argv[8]) : 1000;
+    const bool burst = argc == 10;
     optical::Engine engine;
     if (!engine.prepare(rate, s)) {
         std::cerr << "Operating-point initialization failed at " << optical::unknownNames[engine.worstEquation()]
@@ -29,7 +31,8 @@ int main(int argc, char** argv) {
     std::cout << std::setprecision(13) << "time,pre,gr,out,cell,det,timing\n";
     for (int i = 0; i < static_cast<int>(seconds * rate); ++i) {
         const double t = i / rate;
-        engine.step(amplitude * std::sin(2 * std::numbers::pi * frequency * t));
+        const double level = burst && (t < .025 || t >= .205) ? 0. : amplitude;
+        engine.step(level * std::sin(2 * std::numbers::pi * frequency * t));
         std::cout << t << ',' << engine.voltage(optical::preNode) << ',' << engine.voltage(optical::grNode)
                   << ',' << engine.voltage(optical::outputNode) << ',' << engine.voltage(optical::cellNode)
                   << ',' << engine.voltage(optical::detectorNode) << ',' << engine.voltage(optical::timingNode) << '\n';
