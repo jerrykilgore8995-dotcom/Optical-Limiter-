@@ -115,6 +115,10 @@ public:
         rows.clear();
         dense.clear();
         ready = true;
+        // Default to fully dynamic factorization until a caller supplies a fixed linear part.
+        std::vector<int> all(entries.size());
+        for (int i=0;i<static_cast<int>(all.size());++i) all[i]=i;
+        cacheLinearPart(all);
         return true;
     }
 
@@ -122,6 +126,7 @@ public:
         std::vector<bool> dynamic(entries.size(),false);
         for (const int slot : mutableSlots) dynamic[slot]=true;
         runtime.clear();
+        activePivots.clear();
         activeUpdates.clear();
         int nextUpdate=0;
         for (const auto& s : plan) {
