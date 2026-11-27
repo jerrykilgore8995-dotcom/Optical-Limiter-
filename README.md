@@ -20,4 +20,4 @@ Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to c
 
 ## Playback status
 
-The plugin is an offline-render preview. The full circuit’s driven solve times exceed the 11.61 ms per 512-sample block budget at 44.1 kHz in development tests. Driven high-frequency through tests still have missed solves, and playback on the Ryzen 7 8745HS is unverified. Auto and EPR are outside the manual circuit and are absent from the plugin.
+The plugin is an offline-render preview. The full circuit’s driven solve times exceed the 11.61 ms per 512-sample block budget at 44.1 kHz in development tests. Adaptive trapezoidal refinement passes the driven through spot checks at 5 and 10 kHz. Full-band SPICE agreement and playback on the Ryzen 7 8745HS remain unverified. Auto and EPR are outside the manual circuit and are absent from the plugin.
