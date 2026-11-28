@@ -104,7 +104,7 @@ public:
         save(state.timing, sample.timing);
         const bool crossing = state.ripple.accept(sample.hf, sample.timing, tunedRate,
                                                   settings.ff > .5 ? 1. : settings.ratio,
-                                                  settings.ratio >= 8., settings.att);
+                                                  settings.ratio >= 8., settings.att, settings.soft > .5);
         const double frequency = state.ripple.frequency();
         if (crossing && settings.ratio >= 8.) state.peakGain = peakCalibration(frequency, state.peak);
         state.cellDistortion.accept(cellVolts, cellConductance, tunedRate, crossing, frequency);

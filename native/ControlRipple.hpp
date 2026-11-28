@@ -14,7 +14,7 @@ public:
 
     double frequency() const { return period > 0. ? 1. / period : 0.; }
 
-    bool accept(double audio, double timing, double inverse, double loopRatio = 1., bool peak = false, double attack = .01) {
+    bool accept(double audio, double timing, double inverse, double loopRatio = 1., bool peak = false, double attack = .01, bool soft = false) {
         if (!(inverse > 0.)) {
             *this = {};
             return false;
@@ -60,7 +60,9 @@ public:
                 const double near10k = std::max(0., 1. - std::abs(1. / completed - 10000.) / 1500.);
                 const double quiet = std::clamp((.22 - mean) / .14, 0., 1.)
                                    * std::clamp(mean / .035, 0., 1.);
-                const double nearKnee = peak ? near10k * quiet * (loopRatio > 1. ? -.358 : -.375) : 0.;
+                const double hardTrim = quiet * (loopRatio > 1. ? -.358 : -.375);
+                const double softTrim = -std::max(0., std::min(2. * (mean - .035), 2.15 * (.225 - mean)));
+                const double nearKnee = peak ? near10k * (soft ? softTrim : hardTrim) : 0.;
                 mean += (current - mean) * (.65 / loopRatio) + .065 * (correction * active + nearKnee);
             }
             period = inBand ? completed : 0.;
