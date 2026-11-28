@@ -18,8 +18,9 @@ bool checkControlRipple() {
         int count = 0;
         for (int i = 0; i < static_cast<int>(rate * .25); ++i) {
             const double phase = 2. * std::numbers::pi * frequency * i / rate;
-            const double timing = .8 + .01 * std::cos(2. * phase)
-                + .005 * std::cos(4. * phase) + .0025 * std::cos(6. * phase);
+            double timing = .8;
+            for (int harmonic = 2; harmonic <= 18; harmonic += 2)
+                timing += .02 * std::cos(harmonic * phase) / harmonic;
             const double output = ripple.output(timing, inverse);
             if (frequency == 1000. && output != timing) return false;
             if (i >= static_cast<int>(rate * .15)) {

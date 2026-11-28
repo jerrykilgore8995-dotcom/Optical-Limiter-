@@ -39,6 +39,11 @@ public:
         previousAudio = audio;
         const bool locked = stableCycles >= 2 && elapsed < 1.5 * period;
         if (!locked && (elapsed >= 1.5 * period || inverse != configuredRate)) wet = 0.;
+        if (!locked && wet < 1e-6) {
+            wet = 0.;
+            configuredRate = 0.;
+            return;
+        }
         if (locked && (inverse != configuredRate || std::abs(configuredPeriod - period) > .0005 * period)) {
             const bool resetHistory = wet == 0. || inverse != configuredRate;
             for (std::size_t i = 0; i < notches.size(); ++i) {
@@ -80,7 +85,7 @@ private:
         }
     };
 
-    std::array<Notch, 3> notches{};
+    std::array<Notch, 9> notches{};
     double previousAudio = 0., elapsed = 0., period = 0.;
     double configuredRate = 0., configuredPeriod = 0., wet = 0.;
     int stableCycles = 0;

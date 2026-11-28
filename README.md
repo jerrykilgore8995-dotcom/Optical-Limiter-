@@ -24,7 +24,7 @@ Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to c
 
 The reduced deck adds a small polarity asymmetry to the VTL5C1 current–voltage equation. Its low-voltage scale follows the 3 kΩ and 30 kΩ traces in PerkinElmer Figure 3(a). The odd component of the photocell equation and the manufacturer semiconductor models retain their original form. The K2/K4/K6 partition is an estimate because the source plots total distortion. Outside the two resistance anchors the coefficient is held at the nearest anchor.
 
-The VST3 applies a digital notch bank to the gain command when the detector is tracking a stable tone between 45 and 300 Hz. The notches follow the second, fourth and sixth multiples in the control signal. A soft transition favors the raw timing control during larger changes. The vendor reference and printed reduced SPICE deck do not include these digital notches.
+The VST3 applies a digital notch bank to the gain command when the detector is tracking a stable tone between 45 and 300 Hz. The notches follow the even multiples from the second through the eighteenth in the control signal. A soft transition favors the raw timing control during larger changes. The vendor reference and printed reduced SPICE deck do not include these digital notches.
 
 ## Reduced sidechain
 
