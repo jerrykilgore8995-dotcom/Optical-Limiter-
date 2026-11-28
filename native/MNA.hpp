@@ -189,6 +189,11 @@ struct MNA {
             h.charge = h.trial;
         }
     }
+    double trialCapacitorCurrent(int a, int b, double c, int slot, double coefficient) const {
+        const auto& h = companions[slot];
+        return coefficient * (c * (voltage(a) - voltage(b)) - h.charge) - h.current;
+    }
+
     template<bool FixedJacobian = false>
     OPTICAL_STAMP_INLINE void capacitive(int a, int b, double c, int slot = -1) {
         residual(a, b, companion(c * (voltage(a) - voltage(b)), slot));

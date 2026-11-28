@@ -7,6 +7,13 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #if defined(__SSE2__) || defined(_M_X64)
 #include <xmmintrin.h>
 #endif
@@ -80,6 +87,11 @@ private:
     static constexpr int maximumFrames = 2048;
 
     void run() {
+#if defined(_WIN32)
+        // Give the helper a chance to run ahead of UI and background work.
+        // The host audio callback still never waits for this thread.
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
 #if defined(__SSE2__) || defined(_M_X64)
         _mm_setcsr(_mm_getcsr() | 0x8040); // The callback also flushes subnormals.
 #endif

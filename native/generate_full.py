@@ -178,18 +178,21 @@ if condense:
                    ', '.join(f'V {arg}' for arg in args) + ') { using std::abs; return ' + body + '; }')
     out.append('} // namespace detector_model')
 known_lines = [f'm.v[{ix(n)}]={value};' for n,value in known.items()]
+if condense:
+    known_lines = [line.replace('exp(log(10.0)*gdb/20.0)', 'inputGain') for line in known_lines]
 projection=[]
 projected_nodes = set()
 linear=[]
 dynamic=[]
 capacitor_jacobians=[]
-# These high-curvature detector equations often reject a Newton trial by
-# themselves. Only emit screens for rows whose complete residual is known.
-trial_rows = {ix(n): [] for n in ('charge', 'dpc#rs', 'dcl#rs', 'pkamp',
-                                  'oa', 'dha#rs', 'dhb#rs') if n in nid}
+# Clamp and detector equations can reject a Newton trial by themselves.
+# Only screen rows whose complete residual is known.
+trial_names = {'charge', 'dpc#rs', 'dcl#rs', 'pkamp', 'oa', 'dha#rs', 'dhb#rs'}
+trial_rows = {ix(n): [] for n in nodes if n in trial_names
+              or (condense and re.fullmatch(r'xu[0-9]+[ab]\.xcore\.(11|12|53|54|90)', n))}
 companion_slot = 0
 trial_dependencies = {row: set() for row in trial_rows}
-control_names = re.compile(r'\b(gdb|freq|amp|ff|ratio|soft|sens|hpf|att|rel|makeup|input)\b')
+control_names = re.compile(r'\b(gdb|freq|amp|ff|ratio|soft|sens|hpf|att|rel|makeup|makeupGain|input)\b')
 for x in stamps:
     k=x['kind'];a,b,*rest=map(ix,x['nodes']);name=x['name'];raw=x['raw_value'];line=[]; series=[]
     outside_base=b
@@ -201,7 +204,11 @@ for x in stamps:
             for row in (ix(p), ix(n)):
                 if row in trial_dependencies:
                     trial_dependencies[row].update((ix(p), ix(n)))
-    if k=='r':line.append(f'm.conductance({a},{b},1./({val(x,raw)}));')
+    if k=='r':
+        resistance = val(x, raw)
+        if condense:
+            resistance = resistance.replace('pow(10.0,makeup/20.0)', 'makeupGain')
+        line.append(f'm.conductance({a},{b},1./({resistance}));')
     elif k=='c':
         capacitance = val(x, raw.split()[0])
         call = 'm.capacitive<FixedCaps>' if condense else 'm.capacitive'
@@ -210,6 +217,10 @@ for x in stamps:
             if control_names.search(capacitance):
                 raise ValueError(f'Parameter-dependent capacitance needs a dynamic stamp: {name}')
             capacitor_jacobians.append(f'm.derivative({a},{b},{a},{b},inverse*({capacitance}));')
+        for row, sign in ((a, '-'), (b, '+')):
+            if row in trial_rows:
+                trial_dependencies[row].update((a, b))
+                trial_rows[row].append(f'r {sign}= m.trialCapacitorCurrent({a},{b},{capacitance},{companion_slot},inverse);')
         companion_slot += 1
     elif k=='v':
         v='input' if raw.lower().startswith('sin(') else val(x,re.sub(r'(?i)^dc\s+','',raw))
@@ -290,7 +301,7 @@ for x in stamps:
                 trial_dependencies[row].update(dependencies)
     else:
         dynamic.extend(line)
-        if k != 'd':
+        if k not in ('c', 'd'):
             terminals = [a,b,*rest] if k in 'qj' else [a,b]
             for terminal in terminals:
                 trial_rows.pop(terminal, None)
@@ -298,12 +309,13 @@ for x in stamps:
                 trial_rows.pop(outside_base, None)
 out+=['inline void stampFixed(LinearStamp& m) {', 'auto v=[&](int n){return m.voltage(n);};']
 out+=linear
-out+=['}', 'inline void setKnownTerminals(MNA& m,const Settings& s,double input) {',
+known_args = ',double inputGain' if condense else ''
+out+=['}', f'inline void setKnownTerminals(MNA& m,const Settings& s,double input{known_args}) {{',
       'using std::exp;using std::log; const auto [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;']
 out+=known_lines
 if condense:
     out += ['}', 'inline void stampCapacitorJacobian(MNA& m,double inverse) {', *capacitor_jacobians]
-control_args = ',double target,double targetPre,double targetGr' if condense else ''
+control_args = ',double target,double targetPre,double targetGr,double makeupGain' if condense else ''
 project_args = ',double target' if condense else ''
 template = 'template<bool FixedCaps> ' if condense else ''
 out+=['}', f'{template}inline void stampDynamic(MNA& m,const Settings& s,double inverse{control_args}) {{',

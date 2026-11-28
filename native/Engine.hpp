@@ -21,7 +21,7 @@ public:
         Detector detector;
         EvenResponse evenResponse;
         Settings settings;
-        double lastInput, lastDelta, makeupGain;
+        double lastInput, lastDelta, inputGain, makeupGain;
         unsigned failures, refined;
     };
 
@@ -33,6 +33,7 @@ public:
         state.detector = detector;
         state.evenResponse = evenResponse;
         state.settings = settings;
+        state.inputGain = inputGain;
         state.makeupGain = makeupGain;
         state.lastInput = lastInput;
         state.lastDelta = lastDelta;
@@ -47,6 +48,7 @@ public:
         std::copy(state.companions.begin(), state.companions.end(), m.companions.begin());
         detector = state.detector;
         evenResponse = state.evenResponse;
+        inputGain = state.inputGain;
         makeupGain = state.makeupGain;
         settings = state.settings;
         lastInput = state.lastInput;
@@ -62,6 +64,7 @@ public:
         std::copy(dcBias.begin(), dcBias.end(), m.v.begin());
         previous = older = trialStart = refinementStart = m.v;
         settings = {};
+        inputGain = makeupGain = 1.;
         detector = {};
         evenResponse = {};
         detector.configure(settings);
@@ -75,6 +78,7 @@ public:
         accept(true);
         previous = older = m.v;
         settings = controls;
+        inputGain = gainForInput(settings.gdb);
         makeupGain = std::pow(10., settings.makeup / 20.);
         if (settings.ff <= .5) settings.soft = 0;
         detector.configure(settings);
@@ -94,6 +98,7 @@ public:
         if (settings.gdb != next.gdb || settings.ff != next.ff || settings.ratio != next.ratio
                 || settings.soft != next.soft || settings.sens != next.sens || settings.hpf != next.hpf
                 || settings.att != next.att || settings.rel != next.rel || settings.makeup != next.makeup) {
+            if (settings.gdb != next.gdb) inputGain = gainForInput(next.gdb);
             if (settings.makeup != next.makeup) makeupGain = std::pow(10., next.makeup / 20.);
             settings = next;
             detector.configure(settings);
@@ -158,6 +163,8 @@ public:
     int solverOperations() const { return m.matrix.operationCount(); }
 
 private:
+    static double gainForInput(double db) { return std::exp(std::log(10.) * db / 20.); }
+
     void accept(bool dc) {
         m.acceptCompanions(dc);
         detector.accept(m.voltage(preNode), m.voltage(grNode),
@@ -216,14 +223,14 @@ private:
     template<bool FixedCaps = false>
     bool prepareMatrix(double coefficient) {
         m.matrix.resize(unknownCount);
-        setKnownTerminals(m, settings, 0);
+        setKnownTerminals(m, settings, 0, inputGain);
         detector.begin(coefficient);
         const auto control = detector.control(m.voltage(preNode), m.voltage(grNode));
         projectBehavior(m, settings, control.target);
         fixedStamps.addJacobian(m.matrix);
         if constexpr (FixedCaps) stampCapacitorJacobian(m, coefficient);
         m.matrix.beginDynamicStamp();
-        stampDynamic<FixedCaps>(m, settings, coefficient, control.target, control.preSlope, control.grSlope);
+        stampDynamic<FixedCaps>(m, settings, coefficient, control.target, control.preSlope, control.grSlope, makeupGain);
         if (!m.matrix.prepare()) return false;
         m.matrix.clear();
         fixedStamps.addJacobian(m.matrix);
@@ -234,12 +241,11 @@ private:
     }
 
     template<bool FixedCaps>
-    void stamp(double input, double coefficient, bool raw = false) {
-        setKnownTerminals(m, settings, input);
+    void stamp(double coefficient, bool raw = false) {
         const auto control = detector.control(m.voltage(preNode), m.voltage(grNode));
         projectBehavior(m, settings, control.target);
         fixedStamps.apply(m.matrix, m.v.data(), raw);
-        stampDynamic<FixedCaps>(m, settings, coefficient, control.target, control.preSlope, control.grSlope);
+        stampDynamic<FixedCaps>(m, settings, coefficient, control.target, control.preSlope, control.grSlope, makeupGain);
     }
 
     double merit() {
@@ -267,12 +273,13 @@ private:
     template<bool FixedCaps>
     bool solveStep(double input, double coefficient, int limit) {
         detector.begin(coefficient);
-        stamp<FixedCaps>(input, coefficient);
+        setKnownTerminals(m, settings, input, inputGain);
+        stamp<FixedCaps>(coefficient);
         lastError = merit();
         for (int iter = 0; iter < limit; ++iter) {
             if (lastError < 1e-18) return true;
             if (!m.matrix.solve()) {
-                stamp<FixedCaps>(input, coefficient, true);
+                stamp<FixedCaps>(coefficient, true);
                 if (!m.matrix.solvePivoted()) return false;
             }
             trialStart = m.v;
@@ -282,9 +289,9 @@ private:
                     m.v[i] = trialStart[i] + scale * m.matrix.x[i];
                 // A single nodal residual can already exceed the full
                 // merit limit. Keep the last trial exact for the fallback.
-                if (coefficient > 0 && scale > 1. / 8192
+                if (coefficient > 0 && scale < 1. && scale > 1. / 8192
                         && rejectTrial(m, fixedStamps, coefficient, initial * (1. + 1e-10))) continue;
-                stamp<FixedCaps>(input, coefficient);
+                stamp<FixedCaps>(coefficient);
                 lastError = merit();
                 if (lastError < initial) break;
             }
@@ -298,7 +305,7 @@ private:
     Settings settings;
     Detector detector;
     EvenResponse evenResponse;
-    double makeupGain = 1.;
+    double inputGain = 1., makeupGain = 1.;
     Detector::State savedDetector;
     LinearStamp fixedStamps{0, 0};
     std::vector<double> previous, older, trialStart, refinementStart;
