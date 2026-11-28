@@ -28,7 +28,8 @@ struct EvenResponse {
     double step(const CellCurrentFit& fit, double volts, double conductance,
                 double inverseRate, double makeupGain) {
         const double parallel = conductance + .0001;
-        const double drive = -(conductance / parallel) * fit.evenAc(volts);
+        constexpr double cellEvenGain = 2.;
+        const double drive = -cellEvenGain * (conductance / parallel) * fit.evenAc(volts);
         const double rc = inverseRate * 100e-12 / parallel;
         feedback += (drive + previous - 2. * feedback) / (1. + rc);
         previous = drive;

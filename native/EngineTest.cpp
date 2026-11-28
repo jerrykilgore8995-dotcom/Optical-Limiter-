@@ -1,4 +1,4 @@
-#include "Engine.hpp"
+#include "RateAdaptedEngine.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -8,6 +8,38 @@
 #include <string_view>
 
 namespace {
+
+bool checkDriveThreshold() {
+    constexpr double rate = 44100.;
+    constexpr double frequency = 1000.;
+    struct Case { double inputDbu, trimDb, sensitivity, expectedGr; };
+    constexpr Case cases[]{
+        {4., -18., 1., 2.98}, {4., 0., 1., 2.98}, {4., 18., 1., 2.98},
+        {-24., 18., 29., 2.98}, {24., -18., -19.1, 2.93},
+        {4., 18., optical::thresholdOffSensitivity, 0.},
+    };
+    for (const auto& test : cases) {
+        optical::Settings settings;
+        settings.ff = 1.;
+        settings.soft = 0.;
+        settings.ratio = 2.;
+        settings.gdb = test.trimDb;
+        settings.sens = test.sensitivity;
+        optical::RateAdaptedEngine engine;
+        if (!engine.prepare(rate, settings)) return false;
+        const double peak = std::numbers::sqrt2 * .775 * std::pow(10., test.inputDbu / 20.);
+        for (int i = 0; i < static_cast<int>(rate * .75); ++i)
+            engine.step(peak * std::sin(2. * std::numbers::pi * frequency * i / rate));
+        const double reduction = engine.reductionDb();
+        if (engine.failedSteps() || std::abs(reduction - test.expectedGr) > .15) {
+            std::cerr << "Threshold check at " << test.inputDbu << " dBu and " << test.trimDb
+                      << " dB trim returned " << reduction << " dB reduction, expected "
+                      << test.expectedGr << '\n';
+            return false;
+        }
+    }
+    return true;
+}
 
 bool checkControlRipple() {
     constexpr double rate = 88200.;
@@ -65,6 +97,7 @@ bool checkCellFit() {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--drive-threshold") return checkDriveThreshold() ? 0 : 1;
     if (argc == 2 && std::string_view(argv[1]) == "--ripple") return checkControlRipple() ? 0 : 1;
     if (argc == 2 && std::string_view(argv[1]) == "--cell-fit") return checkCellFit() ? 0 : 1;
     if (argc < 8 || argc > 10 || (argc == 10 && std::string_view(argv[9]) != "burst")) {
@@ -76,6 +109,7 @@ int main(int argc, char** argv) {
     s.soft = std::atof(argv[2]);
     s.ratio = std::atof(argv[3]);
     s.sens = std::atof(argv[4]);
+    if (s.sens == 0.) s.sens = optical::thresholdOffSensitivity;
     const double amplitude = std::sqrt(2.) * .775 * std::pow(10., std::atof(argv[5]) / 20.);
     const double seconds = std::atof(argv[6]);
     const double rate = std::atof(argv[7]);

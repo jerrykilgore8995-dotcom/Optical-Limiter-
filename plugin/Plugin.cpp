@@ -31,6 +31,11 @@ enum Control { drive, sensitivity, ratio, attack, release, makeup, hpf, topology
 constexpr std::array ids{"input", "threshold", "ratio", "attack", "release", "output",
                          "sidechain_hpf", "topology", "knee", "bypass"};
 
+String thresholdText(float sensitivity) {
+    if (sensitivity <= optical::thresholdOffSensitivity) return "OFF";
+    return String(sensitivity < 0.f ? "+" : "") + String(-sensitivity, 1) + " dB";
+}
+
 class Processor final : public juce::AudioProcessor {
 public:
     Processor() : AudioProcessor(BusesProperties().withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -115,11 +120,20 @@ public:
     }
 
     void getStateInformation(juce::MemoryBlock& data) override {
-        if (const auto xml = state.copyState().createXml()) copyXmlToBinary(*xml, data);
+        auto saved = state.copyState();
+        saved.setProperty("extendedThreshold", true, nullptr);
+        if (const auto xml = saved.createXml()) copyXmlToBinary(*xml, data);
     }
     void setStateInformation(const void* data, int size) override {
-        if (const auto xml = getXmlFromBinary(data, size); xml && xml->hasTagName(state.state.getType()))
-            state.replaceState(juce::ValueTree::fromXml(*xml));
+        if (const auto xml = getXmlFromBinary(data, size); xml && xml->hasTagName(state.state.getType())) {
+            auto saved = juce::ValueTree::fromXml(*xml);
+            if (!saved.hasProperty("extendedThreshold")) {
+                auto threshold = saved.getChildWithProperty("id", ids[sensitivity]);
+                if (threshold.isValid() && static_cast<float>(threshold.getProperty("value")) == 0.f)
+                    threshold.setProperty("value", optical::thresholdOffSensitivity, nullptr);
+            }
+            state.replaceState(saved);
+        }
     }
 
     State state;
@@ -136,7 +150,16 @@ private:
                 juce::AudioParameterFloatAttributes().withLabel(unit)));
         };
         range(drive, "Input", {-18.f, 18.f, .1f}, 0, "dB");
-        range(sensitivity, "Threshold Sensitivity", {0.f, 30.f, .1f}, 15, "dB");
+        p.add(std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID{ids[sensitivity], 1}, "Threshold Sensitivity",
+            juce::NormalisableRange<float>{optical::thresholdOffSensitivity, 30.f, .1f}, 15.f,
+            juce::AudioParameterFloatAttributes()
+                .withLabel("dB")
+                .withStringFromValueFunction([](float value, int) { return thresholdText(value); })
+                .withValueFromStringFunction([](const String& text) {
+                    return text.trim().equalsIgnoreCase("OFF")
+                        ? optical::thresholdOffSensitivity : -text.getFloatValue();
+                })));
         p.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{ids[ratio], 1}, "Ratio",
               juce::StringArray{"2:1", "3:1", "4:1", "8:1", "12:1", "20:1"}, 2));
         range(attack, "Attack", {1.f, 40.f, .1f, .63f}, 10, "ms");
@@ -395,7 +418,7 @@ private:
         switch (c) {
             case drive: return String(value, 1) + " dB";
             case makeup: return "+" + String(static_cast<int>(value)) + " dB";
-            case sensitivity: return value == 0 ? "OFF" : String(-value, 1) + " dB";
+            case sensitivity: return thresholdText(static_cast<float>(value));
             case ratio: return String(ratios[static_cast<std::size_t>(value)]) + ":1";
             case attack: return String(value, 1) + " ms";
             case release: return String(static_cast<int>(value)) + " ms";

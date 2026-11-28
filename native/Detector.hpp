@@ -8,6 +8,8 @@
 
 namespace optical {
 
+inline constexpr float thresholdOffSensitivity = -30.1f;
+
 // A scalar with the derivative with respect to the selected sidechain input.
 // Piecewise expressions follow the same branch as the SPICE model.
 struct DetectorVoltage {
@@ -65,20 +67,20 @@ public:
             ratio.tune(inverse, 1. / (10000. * gain * crrf));
             release.tune(inverse, 1. / settings.rel);
             attack.tune(inverse, 1. / settings.att);
-            const double top = std::max(.01, 50000. * (1. - settings.sens / 30.));
-            const double bottom = std::max(.01, 50000. * settings.sens / 30.);
-            threshold = 3. * bottom / (top + bottom);
+            // Keep the detector's reference upstream of Input trim while
+            // preserving the selected feed-forward or feedback signal.
+            threshold = (settings.sens - settings.gdb) / 10.;
         }
         hp.begin(state.hp, inverse); hf.begin(state.hf, inverse);
         avg.begin(state.avg, inverse);
         sub.begin(state.sub, inverse); over.begin(state.over, inverse);
         ratio.begin(state.ratio, inverse); attack.begin(state.timing, inverse);
         release.begin(state.timing, inverse);
-        if (settings.sens <= 0.) darkTarget = targetFor(timeFor(commandFor(ratio(0.)))).value;
+        if (settings.sens <= thresholdOffSensitivity) darkTarget = targetFor(timeFor(commandFor(ratio(0.)))).value;
     }
 
     Result control(double pre, double gr) const {
-        if (settings.sens <= 0.) return {darkTarget, 0., 0.};
+        if (settings.sens <= thresholdOffSensitivity) return {darkTarget, 0., 0.};
         const auto sample = evaluate<false>(DetectorVoltage{selected(pre, gr), 1.});
         const auto target = targetFor(state.ripple.output(sample.timing, tunedRate));
         return {target.value, settings.ff * target.slope, (1. - settings.ff) * target.slope};
@@ -180,7 +182,7 @@ private:
         r.over = over(r.sub * -1.);
         const auto above = max(V{-15.}, min(V{15.}, r.over)) * 10.;
         auto knee = max(V{0.}, above);
-        if (settings.sens <= 0.) knee = V{0.};
+        if (settings.sens <= thresholdOffSensitivity) knee = V{0.};
         else if (settings.soft > .5 && value(above) > -5. && value(above) < 5.) {
             const auto x = above + 5.;
             if constexpr (std::is_same_v<V, double>) knee = x * x / 20.;
