@@ -46,7 +46,28 @@ def expr(s):
                 out+='('+tern(t[i+1:j-1])+')';i=j
             else:out+=t[i];i+=1
         return out
-    return tern(s)
+    def lazy_conditionals(text):
+        prefix = 'ternary_fcn('
+        start = text.find(prefix)
+        if start < 0:
+            return text
+        args = []
+        depth = 0
+        begin = start + len(prefix)
+        for i in range(begin, len(text)):
+            c = text[i]
+            if c == '(':
+                depth += 1
+            elif c == ')' and depth:
+                depth -= 1
+            elif depth == 0 and c in ',)':
+                args.append(lazy_conditionals(text[begin:i]))
+                begin = i + 1
+                if c == ')':
+                    test, yes, no = args
+                    return text[:start] + f'(({test}) ? ({yes}) : ({no}))' + lazy_conditionals(text[i+1:])
+        raise ValueError(text)
+    return lazy_conditionals(tern(s))
 def model(name):
     s=d['models'][name].lower()
     typ=s.split('(')[0].strip()
@@ -129,28 +150,38 @@ out=['#pragma once','#include "MNA.hpp"','#include <cmath>','#include <algorithm
 'struct Settings { double gdb=0,freq=1000,amp=1,ff=1,ratio=4,soft=1,sens=15,hpf=0,att=.01,rel=.1,makeup=0; };',
 'inline double min(double a,double b){return std::min(a,b);} inline double max(double a,double b){return std::max(a,b);}',
 'inline double cg(double x){return min(.005,max(2e-8,x));} inline double cs(double x){return min(4,max(0,x));}',
-'inline double ternary_fcn(bool a,double b,double c){return a?b:c;}',
 f'inline constexpr int nodeCount={len(nodes)}, unknownCount={len(nodes)+len(branches)}, fixedCount={len(known)};',
 f'inline constexpr int outputNode={ix("out")}, preNode={ix("pre")}, grNode={ix("gr")}, cellNode={ix("cell")};',
 f'inline constexpr int timingNode={ix("timing")}, detectorNode={ix("det")};',
 'inline constexpr std::array<double,unknownCount> dcBias{'+','.join(num(x) for x in bias())+'};',
-'inline constexpr std::array<const char*,unknownCount> unknownNames{'+','.join('"'+x+'"' for x in [*nodes,*branches])+'};',
-'inline void stampDeck(MNA& m,const Settings& s,double input,double inverse){',
-'using std::exp;using std::log;using std::log10;using std::pow;using std::sqrt;',
-'const auto [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;',
-'auto v=[&](int n){return m.voltage(n);};m.beginCompanions(inverse);']
-out.extend(f'm.v[{ix(n)}]={value};' for n,value in known.items())
+ 'inline constexpr std::array<const char*,unknownCount> unknownNames{'+','.join('"'+x+'"' for x in [*nodes,*branches])+'};']
+known_lines = [f'm.v[{ix(n)}]={value};' for n,value in known.items()]
 projection=[]
+projected_nodes = set()
+linear=[]
+dynamic=[]
+# These high-curvature detector equations often reject a Newton trial by
+# themselves. Only emit screens for rows whose complete residual is known.
+trial_rows = {ix(n): [] for n in ('charge', 'dpc#rs', 'dcl#rs', 'pkamp',
+                                  'oa', 'dha#rs', 'dhb#rs') if n in nid}
+companion_slot = 0
+trial_dependencies = {row: set() for row in trial_rows}
+control_names = re.compile(r'\b(gdb|freq|amp|ff|ratio|soft|sens|hpf|att|rel|makeup|input)\b')
 for x in stamps:
-    k=x['kind'];a,b,*rest=map(ix,x['nodes']);name=x['name'];raw=x['raw_value'];line=[]
+    k=x['kind'];a,b,*rest=map(ix,x['nodes']);name=x['name'];raw=x['raw_value'];line=[]; series=[]
     outside_base=b
     for p,n,r in x.get('series',[]):
         if k=='q' and n.endswith('#rb'):
             outside_base=ix(p)
         else:
-            line.append(f'm.conductance({ix(p)},{ix(n)},{num(1/r)});')
+            series.append(f'm.conductance({ix(p)},{ix(n)},{num(1/r)});')
+            for row in (ix(p), ix(n)):
+                if row in trial_dependencies:
+                    trial_dependencies[row].update((ix(p), ix(n)))
     if k=='r':line.append(f'm.conductance({a},{b},1./({val(x,raw)}));')
-    elif k=='c':line.append(f'm.capacitive({a},{b},{val(x,raw.split()[0])});')
+    elif k=='c':
+        line.append(f'm.capacitive({a},{b},{val(x,raw.split()[0])},{companion_slot});')
+        companion_slot += 1
     elif k=='v':
         v='input' if raw.lower().startswith('sin(') else val(x,re.sub(r'(?i)^dc\s+','',raw))
         line.append(f'm.source({a},{b},{branches[name]},{v});')
@@ -172,9 +203,24 @@ for x in stamps:
                 if k=='h':line.append(f'm.residual({branches[name]},-1,-({val(x,g)})*v({p}));m.derivative({branches[name]},-1,{p},-1,-({val(x,g)}));')
                 else:line.append(f'm.cccs({a},{b},{p},{val(x,g)});')
     elif k=='d':
-        t,p=model(x['model']);line.append(f'm.diodeDevice({a},{b},{{{params(p,"is n bv ibv cjo vj m fc tt",[1e-14,1,0,.001,0,1,.5,.5,0])}}});')
+        t,p=model(x['model'])
+        spec = params(p,"is n bv ibv cjo vj m fc tt",[1e-14,1,0,.001,0,1,.5,.5,0])
+        stores_charge = p.get('cjo',0) != 0 or p.get('tt',0) != 0
+        slot = companion_slot if stores_charge else -1
+        if stores_charge:
+            companion_slot += 1
+        line.append(f'm.diodeDevice({a},{b},{{{spec}}},{slot});')
+        for row, sign in ((a, '-'), (b, '+')):
+            if row in trial_rows:
+                trial_dependencies[row].update((a, b))
+                trial_rows[row].append(f'r {sign}= m.trialDiodeCurrent({a},{b},{{{spec}}},{slot},inverse);')
     elif k=='q':
-        t,p=model(x['model']);line.append(f'm.bjtDevice({a},{b},{rest[0]},{outside_base},{-1 if t=="pnp" else 1},{{{params(p,"is bf nf br nr vaf var ikf ikr ise ne isc nc nk cje vje mje cjc vjc mjc fc tf tr xtf itf vtf rb rbm irb",[1e-16,100,1,1,1,0,0,0,0,0,1.5,0,2,.5,0,.75,.33,0,.75,.33,.5,0,0,0,0,0,0,p.get('rb',0),0])}}});')
+        t,p=model(x['model'])
+        stores_charge = any(p.get(key,0) != 0 for key in ('cje','cjc','tf','tr'))
+        slot = companion_slot if stores_charge else -1
+        if stores_charge:
+            companion_slot += 2
+        line.append(f'm.bjtDevice({a},{b},{rest[0]},{outside_base},{-1 if t=="pnp" else 1},{{{params(p,"is bf nf br nr vaf var ikf ikr ise ne isc nc nk cje vje mje cjc vjc mjc fc tf tr xtf itf vtf rb rbm irb",[1e-16,100,1,1,1,0,0,0,0,0,1.5,0,2,.5,0,.75,.33,0,.75,.33,.5,0,0,0,0,0,0,p.get('rb',0),0])}}},{slot});')
     elif k=='j':
         t,p=model(x['model']);line.append(f'm.jfet({a},{b},{rest[0]},{-1 if t=="pjf" else 1},{params(p,"vto beta is lambda",[-2,1e-4,1e-14,0])});')
     elif k=='s':
@@ -192,16 +238,51 @@ for x in stamps:
         key=branches[name] if mode.lower()=='v' else -1
         if key>=0:
             assert b==-1
+            projected_nodes.add(a)
             projection.append(f'm.v[{a}]={body}; // {name}')
         line.append(f'm.behavior({a},{b},{key},{{{",".join(map(str,refs))}}},[&](auto w){{return {body};}});')
     else:raise ValueError(x)
-    out.append(' '.join(line)+' // '+name)
-out+=['m.endCompanions();','}']
+    # Series resistance and parameter-independent linear elements have
+    # a constant Jacobian. Known terminal voltages still vary per sample.
+    coefficient = ' '.join(line)
+    linear.extend(series)
+    if k in 'rievfgh' and not control_names.search(coefficient):
+        linear.extend(line)
+        dependencies = [a, b, *(ix(n) for pair in x.get('control_nodes', []) for n in pair)]
+        for row in (a, b):
+            if row in trial_dependencies:
+                trial_dependencies[row].update(dependencies)
+    else:
+        dynamic.extend(line)
+        if k != 'd':
+            terminals = [a,b,*rest] if k in 'qj' else [a,b]
+            for terminal in terminals:
+                trial_rows.pop(terminal, None)
+            if k == 'q':
+                trial_rows.pop(outside_base, None)
+out+=['inline void stampFixed(LinearStamp& m) {', 'auto v=[&](int n){return m.voltage(n);};']
+out+=linear
+out+=['}', 'inline void setKnownTerminals(MNA& m,const Settings& s,double input) {',
+      'using std::exp;using std::log; const auto [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;']
+out+=known_lines
+out+=['}', 'inline void stampDynamic(MNA& m,const Settings& s,double inverse) {',
+      'using std::exp;using std::log;using std::log10;using std::pow;using std::sqrt;',
+      'const auto [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;',
+      'auto v=[&](int n){return m.voltage(n);};m.beginCompanions(inverse);']
+out+=dynamic
+out+=['m.endCompanions();','}', f'inline constexpr int companionCount = {companion_slot};']
 out+=['inline void projectBehavior(MNA& m,const Settings& s) {',
       'using std::exp;using std::log10;using std::pow;using std::sqrt;',
       'const auto& [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;',
       'auto w=[&](int n){return m.voltage(n);};']
 out+=projection
-out+=['}','}']
+out+=['}', 'inline bool rejectTrial(const MNA& m, const LinearStamp& linear, double inverse, double limit) {']
+for row, contributions in trial_rows.items():
+    if trial_dependencies[row] & projected_nodes:
+        continue
+    out += [f'    {{ double r = linear.residualForRow({row}, m.v.data());',
+            *('      '+line for line in contributions),
+            '      if (r*r > limit) return true; }']
+out += ['    return false;', '}', '}']
 output_path.write_text('\n'.join(out)+'\n')
 print('Generated full circuit stamps:',len(dev),'unknowns:',len(nodes)+len(branches))

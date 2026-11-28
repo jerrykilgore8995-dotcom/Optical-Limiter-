@@ -1,24 +1,95 @@
 #pragma once
+#include "StampInline.hpp"
 #include "DeviceMath.hpp"
 #include "Sparse.hpp"
 #include <vector>
 #include <stdexcept>
 namespace optical {
+// A preparation-only collector for the affine part of the circuit.
+class LinearStamp {
+public:
+    LinearStamp(int rows, int columns)
+        : rows(rows), columns(columns), coefficients(rows * columns), offsets(rows) {}
+
+    double voltage(int) const { return 0.; }
+
+    void residual(int a, int b, double value) {
+        if (a >= 0 && a < rows) offsets[a] -= value;
+        if (b >= 0 && b < rows) offsets[b] += value;
+    }
+
+    void derivative(int a, int b, int p, int n, double value) {
+        add(a, p, value); add(a, n, -value); add(b, p, -value); add(b, n, value);
+    }
+
+    void conductance(int a, int b, double g) { derivative(a, b, a, b, g); }
+    void controlled(int a, int b, int p, int n, double g) { derivative(a, b, p, n, g); }
+    void cccs(int a, int b, int control, double g) { derivative(a, b, control, -1, g); }
+    void source(int a, int b, int k, double volts) {
+        derivative(a, b, k, -1, 1.);
+        derivative(k, -1, a, b, 1.);
+        residual(k, -1, -volts);
+    }
+
+    void build() {
+        for (int row = 0; row < rows; ++row) {
+            starts.push_back(static_cast<int>(terms.size()));
+            for (int col = 0; col < columns; ++col) {
+                const auto g = coefficients[row * columns + col];
+                if (g == 0.) continue;
+                terms.push_back({col, g});
+            }
+        }
+        starts.push_back(static_cast<int>(terms.size()));
+        std::vector<double>{}.swap(coefficients);
+    }
+
+    void addJacobian(Sparse& matrix) const {
+        for (int row = 0; row < rows; ++row)
+            for (int i = starts[row]; i < starts[row + 1]; ++i)
+                if (terms[i].column < rows)
+                    matrix.add(row, terms[i].column, terms[i].value);
+    }
+
+    double residualForRow(int row, const double* values) const {
+        double rhs = offsets[row];
+        for (int i = starts[row]; i < starts[row + 1]; ++i)
+            rhs -= terms[i].value * values[terms[i].column];
+        return rhs;
+    }
+
+    void apply(Sparse& matrix, const double* values, bool raw) const {
+        matrix.restoreLinearEntries(raw);
+        for (int row = 0; row < rows; ++row)
+            matrix.rhs[row] = residualForRow(row, values);
+    }
+
+private:
+    struct Term { int column; double value; };
+    void add(int row, int col, double value) {
+        if (row >= 0 && row < rows && col >= 0) coefficients[row * columns + col] += value;
+    }
+    int rows, columns;
+    std::vector<double> coefficients, offsets;
+    std::vector<int> starts;
+    std::vector<Term> terms;
+};
+
 struct MNA {
     Sparse matrix;
     std::vector<double> v;
     explicit MNA(int n, int fixed=0):v(n+fixed,0.), unknowns(n) {matrix.resize(n); companions.reserve(128);}
-    double voltage(int i) const {return i<0?0.:v[i];}
-    void residual(int a,int b,double i) {
+    OPTICAL_STAMP_INLINE double voltage(int i) const {return i<0?0.:v[i];}
+    OPTICAL_STAMP_INLINE void residual(int a,int b,double i) {
         if(a>=0 && a<unknowns)matrix.rhs[a]-=i;
         if(b>=0 && b<unknowns)matrix.rhs[b]+=i;
     }
-    void derivative(int a,int b,int p,int n,double g, bool variable=false) {
+    OPTICAL_STAMP_INLINE void derivative(int a,int b,int p,int n,double g, bool variable=false) {
         const int plus=p<unknowns?p:-1, minus=n<unknowns?n:-1;
         if (a<unknowns) {matrix.add(a,plus,g,variable);matrix.add(a,minus,-g,variable);}
         if (b<unknowns) {matrix.add(b,plus,-g,variable);matrix.add(b,minus,g,variable);}
     }
-    void conductance(int a,int b,double g,bool variable=false) {
+    OPTICAL_STAMP_INLINE void conductance(int a,int b,double g,bool variable=false) {
         residual(a,b,(voltage(a)-voltage(b))*g);derivative(a,b,a,b,g,variable);
     }
     void capacitor(int a,int b,double c,double previousV,double dt) {
@@ -35,11 +106,11 @@ struct MNA {
         residual(a,b,2*(q.value-previousQ)/dt-previousI);
         derivative(a,b,a,b,2*q.p/dt);
     }
-    void source(int a,int b,int k,double volts) {
+    OPTICAL_STAMP_INLINE void source(int a,int b,int k,double volts) {
         residual(a,b,voltage(k));derivative(a,b,k,-1,1.);
         residual(k,-1,voltage(a)-voltage(b)-volts);derivative(k,-1,a,b,1.);
     }
-    void controlled(int a,int b,int p,int n,double gain) {
+    OPTICAL_STAMP_INLINE void controlled(int a,int b,int p,int n,double gain) {
         residual(a,b,gain*(voltage(p)-voltage(n)));derivative(a,b,p,n,gain);
     }
     // Voltage controlled voltage source: branch current plus constraint equation.
@@ -47,14 +118,14 @@ struct MNA {
         source(a,b,k,gain*(voltage(p)-voltage(n)));
         derivative(k,-1,p,n,-gain);
     }
-    void cccs(int a,int b,int k,double gain) {
+    OPTICAL_STAMP_INLINE void cccs(int a,int b,int k,double gain) {
         residual(a,b,gain*voltage(k));derivative(a,b,k,-1,gain);
     }
     void ccvs(int a,int b,int k,int control,double gain) {
         source(a,b,k,gain*voltage(control));
         derivative(k,-1,control,-1,-gain);
     }
-    template<class F> void behavior(int a,int b,int k,std::initializer_list<int> refs,F fn) {
+    template<class F> OPTICAL_STAMP_INLINE void behavior(int a,int b,int k,std::initializer_list<int> refs,F fn) {
         auto w=[&](int n){return voltage(n);};
         const double value=fn(w);
         if(k>=0)source(a,b,k,value);else residual(a,b,value);
@@ -71,13 +142,13 @@ struct MNA {
         residual(a,b,j.value+1e-12*(voltage(a)-voltage(b)));
         derivative(a,b,a,b,j.p+1e-12,true);
     }
-    void terminal(int row,int c,int b,int e,int sign,Jet j) {
+    OPTICAL_STAMP_INLINE void terminal(int row,int c,int b,int e,int sign,Jet j) {
         residual(row,-1,sign*j.value);
         derivative(row,-1,c,-1,-j.q,true);
         derivative(row,-1,b,-1,j.p+j.q,true);
         derivative(row,-1,e,-1,-j.p,true);
     }
-    void jfet(int d,int g,int s,int sign,double vto,double beta,double is,double lambda=0) {
+    OPTICAL_STAMP_INLINE void jfet(int d,int g,int s,int sign,double vto,double beta,double is,double lambda=0) {
         const Jet gs{sign*(voltage(g)-voltage(s)),1,0},gd{sign*(voltage(g)-voltage(d)),0,1};
         const Jet ds=gs-gd;const bool reverse=ds.value<0;
         const Jet u=(reverse?gd:gs)-Jet{vto};
@@ -92,9 +163,12 @@ struct MNA {
     // charge and companion current. Failed Newton trials never advance them.
     struct Companion { double charge = 0, current = 0, trial = 0; };
     void beginCompanions(double coefficient) { inverse = coefficient; nextCompanion = 0; }
-    double companion(double q) {
-        if (nextCompanion == companions.size()) companions.emplace_back();
-        auto& h = companions[nextCompanion++];
+    OPTICAL_STAMP_INLINE double companion(double q, int slot = -1) {
+        if (slot < 0) {
+            if (nextCompanion == companions.size()) companions.emplace_back();
+            slot = static_cast<int>(nextCompanion++);
+        }
+        auto& h = companions[slot];
         h.trial = q;
         return inverse > 0 ? inverse * (q - h.charge) - h.current : 0;
     }
@@ -105,27 +179,43 @@ struct MNA {
             h.charge = h.trial;
         }
     }
-    void capacitive(int a, int b, double c) {
-        residual(a, b, companion(c * (voltage(a) - voltage(b))));
+    OPTICAL_STAMP_INLINE void capacitive(int a, int b, double c, int slot = -1) {
+        residual(a, b, companion(c * (voltage(a) - voltage(b)), slot));
         derivative(a, b, a, b, inverse * c);
     }
 
     struct Diode {
         double is, n, bv, ibv, cjo, vj, m, fc, tt;
     };
-    void diodeDevice(int a, int b, Diode p) {
+    struct DiodeState { double current, slope; Jet charge; };
+
+    OPTICAL_STAMP_INLINE DiodeState evaluateDiode(int a, int b, Diode p) const {
         const Jet volts{voltage(a) - voltage(b), 1};
         const double vt = p.n * thermal;
         const double breakdown = p.bv - vt * std::log(p.ibv / p.is);
         const auto diffusion = p.bv > 0 && volts.value < -breakdown
             ? junction(Jet{-breakdown} - volts, vt, p.is) * -1 + Jet{-p.is}
             : junction(volts, vt, p.is);
-        double i = diffusion.value + 1e-12 * volts.value;
-        double g = diffusion.p + 1e-12;
+        const auto q = p.cjo != 0 || p.tt != 0
+            ? depletion(volts, p.cjo, p.vj, p.m, p.fc) + diffusion * p.tt : Jet{};
+        return {diffusion.value + 1e-12 * volts.value, diffusion.p + 1e-12, q};
+    }
+
+    OPTICAL_STAMP_INLINE double trialDiodeCurrent(int a, int b, Diode p, int slot,
+                                                double coefficient) const {
+        const auto d = evaluateDiode(a, b, p);
+        if (slot < 0) return d.current;
+        const auto& h = companions[slot];
+        return d.current + (coefficient * (d.charge.value - h.charge) - h.current);
+    }
+
+    OPTICAL_STAMP_INLINE void diodeDevice(int a, int b, Diode p, int slot = -1) {
+        const auto d = evaluateDiode(a, b, p);
+        double i = d.current;
+        double g = d.slope;
         if (p.cjo != 0 || p.tt != 0) {
-            const auto q = depletion(volts, p.cjo, p.vj, p.m, p.fc) + diffusion * p.tt;
-            i += companion(q.value);
-            g += inverse * q.p;
+            i += companion(d.charge.value, slot);
+            g += inverse * d.charge.p;
         }
         residual(a, b, i);
         derivative(a, b, a, b, g, true);
@@ -136,7 +226,7 @@ struct MNA {
         double nk, cje, vje, mje, cjc, vjc, mjc, fc, tf, tr, xtf, itf, vtf;
         double rb, rbm, irb;
     };
-    void bjtDevice(int c, int b, int e, int externalBase, int sign, const BJT& m) {
+    OPTICAL_STAMP_INLINE void bjtDevice(int c, int b, int e, int externalBase, int sign, const BJT& m, int slot = -1) {
         const Jet be{sign * (voltage(b) - voltage(e)), 1, 0};
         const Jet bc{sign * (voltage(b) - voltage(c)), 0, 1};
         const auto f = junction(be, m.nf * thermal, m.is);
@@ -181,8 +271,8 @@ struct MNA {
                 }
                 qf = qf + forward * m.tf;
             }
-            ibf = ibf + Jet{companion(qf.value), inverse * qf.p, inverse * qf.q};
-            ibr = ibr + Jet{companion(qr.value), inverse * qr.p, inverse * qr.q};
+            ibf = ibf + Jet{companion(qf.value, slot), inverse * qf.p, inverse * qf.q};
+            ibr = ibr + Jet{companion(qr.value, slot < 0 ? -1 : slot + 1), inverse * qr.p, inverse * qr.q};
         }
         terminal(c, c, b, e, sign, t - ibr);
         terminal(b, c, b, e, sign, ibf + ibr);

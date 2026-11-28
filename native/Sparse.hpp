@@ -1,4 +1,5 @@
 #pragma once
+#include "StampInline.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -23,18 +24,21 @@ public:
         lookup.assign(n * n, -1);
         dense.assign(n * n, 0);
         mutablePattern.assign(n * n, false);
+        dynamicPattern.assign(n * n, false);
+        recordDynamic = false;
         rhs.assign(n, 0);
         x.assign(n, 0);
         ready = false;
     }
 
-    void add(int row, int column, double value, bool variable=false) {
+    OPTICAL_STAMP_INLINE void add(int row, int column, double value, bool variable=false) {
         if (row < 0 || column < 0) return;
         const int offset = row * size + column;
         if (!ready) {
             lookup[offset] = 0;
             dense[offset] += value;
             if (variable) mutablePattern[offset]=true;
+            if (recordDynamic) dynamicPattern[offset]=true;
         } else {
             const int slot = lookup[offset];
             if (slot >= 0) entries[slot] += value;
@@ -153,6 +157,10 @@ public:
                 const auto& row=lowers[j];
                 const bool factorChanges=pivotChanges||dynamic[row.slot];
                 const double factor=factorChanges?0:entries[row.slot]*reciprocal;
+                if (!factorChanges && factor == 0.) {
+                    nextUpdate += s.upperEnd - s.upperBegin;
+                    continue;
+                }
                 const int first=static_cast<int>(activeUpdates.size());
                 for (int k=s.upperBegin;k<s.upperEnd;++k) {
                     const int target=updates[nextUpdate++];
@@ -198,6 +206,28 @@ public:
     void startIteration(const std::vector<double>& initial) {
         std::copy(fixed.begin(),fixed.end(),entries.begin());
         std::copy(initial.begin(),initial.end(),rhs.begin());
+    }
+
+    void saveLinearEntries() { linearEntries = entries; }
+
+    void beginDynamicStamp() {
+        recordDynamic = true;
+    }
+
+    void cachePreparedFactorization() {
+        recordDynamic = false;
+        std::vector<int> dynamicSlots;
+        for (const auto& position : original)
+            if (dynamicPattern[position.index * size + position.slot])
+                dynamicSlots.push_back(at(position.index, position.slot));
+        restoreLinearEntries(true);
+        cacheLinearPart(dynamicSlots);
+        std::vector<bool>{}.swap(dynamicPattern);
+    }
+
+    void restoreLinearEntries(bool raw = false) {
+        const auto& initial = raw ? linearEntries : fixed;
+        std::copy(initial.begin(), initial.end(), entries.begin());
     }
 
     void clear() {
@@ -373,6 +403,8 @@ private:
     int size = 0;
     bool ready = false;
     std::vector<int> lookup, updates;
+    std::vector<bool> dynamicPattern;
+    bool recordDynamic = false;
     std::vector<Row> rows;
     struct Pivot { int row,column,pivot,upperBegin,upperEnd,lowerBegin,lowerEnd; };
     std::vector<Pivot> plan;
@@ -381,7 +413,7 @@ private:
     std::vector<ActiveLower> runtime;
     std::vector<ActivePivot> activePivots;
     std::vector<Terminal> uppers,lowers,activeUpdates;
-    std::vector<double> dense, entries, fixed;
+    std::vector<double> dense, entries, fixed, linearEntries;
     std::vector<Terminal> original;
     std::vector<double> pivoted,pivotRhs;
     std::vector<int> pivotOrder;

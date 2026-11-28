@@ -8,6 +8,7 @@
 #include <iostream>
 #include <memory>
 #include <numbers>
+#include <vector>
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
@@ -34,13 +35,18 @@ bool checkHighFrequencyResponse(juce::AudioPluginInstance& instance) {
         juce::AudioBuffer<float> audio(2, blockSize);
         juce::MidiBuffer midi;
         std::complex<double> output{};
+        std::vector<double> blockTimes;
         for (int frame = 0; frame < settle + measure; frame += blockSize) {
             for (int i = 0; i < blockSize; ++i) {
                 const double angle = 2 * std::numbers::pi * frequency * (frame + i) / rate;
                 audio.setSample(0, i, static_cast<float>(amplitude * std::sin(angle)));
                 audio.setSample(1, i, 0.f);
             }
+            const auto start = std::chrono::steady_clock::now();
             instance.processBlock(audio, midi);
+            if (frame >= settle)
+                blockTimes.push_back(std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - start).count());
             for (int i = 0; i < blockSize && frame + i < settle + measure; ++i) {
                 if (frame + i < settle) continue;
                 const double angle = 2 * std::numbers::pi * frequency * (frame + i) / rate;
@@ -48,6 +54,10 @@ bool checkHighFrequencyResponse(juce::AudioPluginInstance& instance) {
             }
         }
         gain[band++] = 20 * std::log10(2 * std::abs(output) / (measure * amplitude));
+        std::sort(blockTimes.begin(), blockTimes.end());
+        std::cout << "Threshold-off " << frequency << " Hz, one driven channel, median "
+                  << blockTimes[blockTimes.size() / 2] << " ms/512, max "
+                  << blockTimes.back() << " ms/512\n";
         instance.releaseResources();
     }
     const double rolloff = gain[1] - gain[0];
@@ -111,25 +121,36 @@ int main(int argc, char** argv) {
         instance->prepareToPlay(44100, 512);
         juce::AudioBuffer<float> audio(channels, 512);
         juce::MidiBuffer midi;
-        double outEnergy = 0, inEnergy = 0;
+        std::array<double, 2> outEnergy{}, inEnergy{};
         std::array<double, 10> times{};
-        for (int block = 0; block < 10; ++block) {
+        constexpr int warmup = 2;
+        for (int block = 0; block < warmup + static_cast<int>(times.size()); ++block) {
+            const bool rightDriven = channels == 2 && block >= warmup;
             for (int i = 0; i < 512; ++i) {
                 const auto input = static_cast<float>(.10 * std::sin(2 * std::numbers::pi * 1000
                                                                     * (block * 512 + i) / 44100.));
                 audio.setSample(0, i, input);
-                if (channels == 2) audio.setSample(1, i, 0);
-                if (block == 9) inEnergy += input * input;
+                if (channels == 2) {
+                    const auto right = rightDriven ? static_cast<float>(.08 * std::sin(
+                        2 * std::numbers::pi * 733 * (block * 512 + i) / 44100.)) : 0.f;
+                    audio.setSample(1, i, right);
+                    if (block == warmup + static_cast<int>(times.size()) - 1) inEnergy[1] += right * right;
+                }
+                if (block == warmup + static_cast<int>(times.size()) - 1) inEnergy[0] += input * input;
             }
             const auto start = std::chrono::steady_clock::now();
             instance->processBlock(audio, midi);
-            times[static_cast<std::size_t>(block)] =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            if (block >= warmup)
+                times[static_cast<std::size_t>(block - warmup)] =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - start).count();
             for (int i = 0; i < 512; ++i) {
-                const auto output = audio.getSample(0, i);
-                if (!std::isfinite(output)) return 1;
-                if (channels == 2 && std::abs(audio.getSample(1, i)) > .001f) return 1;
-                if (block == 9) outEnergy += output * output;
+                for (int channel = 0; channel < channels; ++channel) {
+                    const auto output = audio.getSample(channel, i);
+                    if (!std::isfinite(output) || (channel == 1 && !rightDriven && std::abs(output) > .001f))
+                        return 1;
+                    if (block == warmup + static_cast<int>(times.size()) - 1) outEnergy[channel] += output * output;
+                }
             }
         }
         const double ratio = std::sqrt(outEnergy / inEnergy);

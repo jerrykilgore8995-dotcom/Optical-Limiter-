@@ -20,4 +20,6 @@ Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to c
 
 ## Playback status
 
-The plugin is an offline-render preview. The full circuit’s driven solve times exceed the 11.61 ms per 512-sample block budget at 44.1 kHz in development tests. The packaged test host compares the threshold-off gain at 1 and 20 kHz at 44.1 kHz against the SPICE through response. Playback on the Ryzen 7 8745HS remains unverified. Auto and EPR are outside the manual circuit and are absent from the plugin.
+The engine reuses constant conductance and source stamps and the invariant part of sparse elimination. It preallocates trapezoidal charge histories. A few detector equations screen Newton trials when their individual residual already exceeds the full convergence merit. Trials that pass the screen still run through the complete circuit, including the manufacturer device models.
+
+The plugin is an offline-render preview. The full circuit’s driven solve times exceed the 11.61 ms per 512-sample block budget at 44.1 kHz in development tests. The packaged test host logs median and maximum block times with both stereo channels driven. It compares the threshold-off gain at 1 and 20 kHz at 44.1 kHz against the SPICE through response. Playback on the Ryzen 7 8745HS remains unverified. Auto and EPR are outside the manual circuit and are absent from the plugin.

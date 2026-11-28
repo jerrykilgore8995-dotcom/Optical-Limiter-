@@ -16,13 +16,16 @@ public:
     bool prepare(double sampleRate, const Settings& controls) {
         inverse = 2 * sampleRate;
         m = MNA(unknownCount, fixedCount);
+        m.companions.resize(companionCount);
         std::copy(dcBias.begin(), dcBias.end(), m.v.begin());
         previous = older = trialStart = refinementStart = m.v;
         settings = {};
         lastInput = lastDelta = 0;
         failures = refined = 0;
-        stampDeck(m, settings, 0, 0);
-        if (!m.matrix.prepare() || !newton(0, 0, 50))
+        fixedStamps = LinearStamp(unknownCount, unknownCount + fixedCount);
+        stampFixed(fixedStamps);
+        fixedStamps.build();
+        if (!prepareMatrix(0) || !newton(0, 0, 50))
             return false;
         m.acceptCompanions(true);
         previous = older = m.v;
@@ -31,10 +34,9 @@ public:
             return false;
         m.acceptCompanions(true);
         previous = older = m.v;
-        m.matrix.resize(unknownCount);
-        stampDeck(m, settings, 0, inverse);
+        if (!prepareMatrix(inverse)) return false;
         savedCompanions = m.companions;
-        return m.matrix.prepare();
+        return true;
     }
 
     void configure(const Settings& next) {
@@ -134,10 +136,26 @@ private:
         return position == divisions;
     }
 
-    void stamp(double input, double coefficient) {
-        m.matrix.clear();
+    bool prepareMatrix(double coefficient) {
+        m.matrix.resize(unknownCount);
+        setKnownTerminals(m, settings, 0);
         projectBehavior(m, settings);
-        stampDeck(m, settings, input, coefficient);
+        fixedStamps.addJacobian(m.matrix);
+        m.matrix.beginDynamicStamp();
+        stampDynamic(m, settings, coefficient);
+        if (!m.matrix.prepare()) return false;
+        m.matrix.clear();
+        fixedStamps.addJacobian(m.matrix);
+        m.matrix.saveLinearEntries();
+        m.matrix.cachePreparedFactorization();
+        return true;
+    }
+
+    void stamp(double input, double coefficient, bool raw = false) {
+        setKnownTerminals(m, settings, input);
+        projectBehavior(m, settings);
+        fixedStamps.apply(m.matrix, m.v.data(), raw);
+        stampDynamic(m, settings, coefficient);
     }
 
     double merit() {
@@ -162,7 +180,7 @@ private:
         for (int iter = 0; iter < limit; ++iter) {
             if (lastError < 1e-18) return true;
             if (!m.matrix.solve()) {
-                stamp(input, coefficient);
+                stamp(input, coefficient, true);
                 if (!m.matrix.solvePivoted()) return false;
             }
             trialStart = m.v;
@@ -170,6 +188,10 @@ private:
             for (double scale = 1; scale >= 1. / 8192; scale *= .5) {
                 for (int i = 0; i < unknownCount; ++i)
                     m.v[i] = trialStart[i] + scale * m.matrix.x[i];
+                // A single nodal residual can already exceed the full
+                // merit limit. Keep the last trial exact for the fallback.
+                if (coefficient > 0 && scale > 1. / 8192
+                        && rejectTrial(m, fixedStamps, coefficient, initial * (1. + 1e-10))) continue;
                 stamp(input, coefficient);
                 lastError = merit();
                 if (lastError < initial) break;
@@ -181,6 +203,7 @@ private:
 
     MNA m{unknownCount, fixedCount};
     Settings settings;
+    LinearStamp fixedStamps{0, 0};
     std::vector<double> previous, older, trialStart, refinementStart;
     std::vector<MNA::Companion> savedCompanions;
     double inverse = 0, lastInput = 0, lastDelta = 0;
