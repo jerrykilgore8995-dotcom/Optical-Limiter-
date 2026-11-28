@@ -38,7 +38,7 @@ jobs:
           name: optical-operating-point
           path: seed
       - name: Configure the x64 build
-        run: cmake -S . -B build -A x64 -DOPTICAL_SPICE_SEED="$PWD/seed/operating-point.raw"
+        run: cmake -S . -B build -A x64 -T ClangCL "-DCMAKE_CXX_FLAGS=/clang:-mavx2 /clang:-mfma" -DOPTICAL_SPICE_SEED="$PWD/seed/operating-point.raw"
       - name: Build VST3 and tests
         run: cmake --build build --config Release --target OpticalLimiter_VST3 OpticalEngineTest OpticalVst3Test --parallel 4
       - name: Verify dynamics and load the VST3 in a test host

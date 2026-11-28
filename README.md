@@ -14,7 +14,7 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The Windows x64 GitHub Actions job exports the operating point, builds the plugin, loads the VST3 in a test host, and renders audio in mono and stereo. It publishes the VST3 bundle and a panel capture.
+The Windows x64 GitHub Actions job builds with clang-cl and targets CPUs with AVX2 and FMA. It exports the operating point, builds the plugin, loads the VST3 in a test host, and renders audio in mono and stereo. It publishes the VST3 bundle and a panel capture.
 
 Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to compare native output, gain reduction, phase, and THD with a fresh ngspice run of the same deck. `--short` runs both detector branches across all four modes. The 5% flag evaluates fundamental amplitude and gain reduction. Phase and THD are reported separately.
 
