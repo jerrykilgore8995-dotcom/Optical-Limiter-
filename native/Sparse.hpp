@@ -1,9 +1,11 @@
 #pragma once
+#include "StampInline.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <bit>
+#include <limits>
 #include <ostream>
 #include <string_view>
 #include <vector>
@@ -21,17 +23,22 @@ public:
         size = n;
         lookup.assign(n * n, -1);
         dense.assign(n * n, 0);
+        mutablePattern.assign(n * n, false);
+        dynamicPattern.assign(n * n, false);
+        recordDynamic = false;
         rhs.assign(n, 0);
         x.assign(n, 0);
         ready = false;
     }
 
-    void add(int row, int column, double value) {
+    OPTICAL_STAMP_INLINE void add(int row, int column, double value, bool variable=false) {
         if (row < 0 || column < 0) return;
         const int offset = row * size + column;
         if (!ready) {
             lookup[offset] = 0;
             dense[offset] += value;
+            if (variable) mutablePattern[offset]=true;
+            if (recordDynamic) dynamicPattern[offset]=true;
         } else {
             const int slot = lookup[offset];
             if (slot >= 0) entries[slot] += value;
@@ -43,6 +50,15 @@ public:
         updates.clear();
         activePivots.clear();
         std::vector<bool> liveRows(size, true), liveColumns(size, true);
+        original.clear();
+        for (int row=0; row<size; ++row)
+            for (int col=0; col<size; ++col)
+                if (has(row,col)) original.push_back({row,col});
+        pivoted.assign(size*size,0.);
+        pivotRhs.resize(size);
+        pivotOrder.resize(size);
+        used.resize(size);
+        nonzero.resize((size+63)/64*size);
         for (int step = 0; step < size; ++step) {
             std::vector<int> rowCount(size, 0), colCount(size, 0);
             std::vector<double> colMax(size, 0), rowMax(size, 0);
@@ -54,7 +70,7 @@ public:
                     rowMax[row] = std::max(rowMax[row], std::abs(v(row,col)));
                 }
             }
-            int pr = -1, pc = -1, best = 2*size*size;
+            int pr = -1, pc = -1, best = std::numeric_limits<int>::max();
             double tie = -1.0;
             for (int row = 0; row < size; ++row) if (liveRows[row]) {
                 for (int col = 0; col < size; ++col) if (liveColumns[col] && has(row,col)) {
@@ -62,7 +78,8 @@ public:
                     if (pivot < 1e-17 || pivot < 0.01 * colMax[col]) continue;
                     // Prefer self-admittances to off-diagonal transistor
                     // gains which can disappear as the device cuts off.
-                    const int cost = (rowCount[row]-1) * (colCount[col]-1) + (row!=col?size*size:0);
+                    const int cost = (rowCount[row]-1) * (colCount[col]-1) + (row!=col?1:0)
+                        + (mutablePattern[row*size+col]?24:0);
                     const double scaled = pivot / (rowMax[row] + 1e-30);
                     if (cost < best || (cost == best && scaled > tie)) {
                         best = cost;
@@ -83,8 +100,11 @@ public:
                 if (!liveRows[row] || !has(row,pc)) continue;
                 s.lower.push_back({row, 0});
                 const double factor = v(row,pc)/v(pr,pc);
+                const bool changes = mutablePattern[row*size+pc] || mutablePattern[pr*size+pc];
                 for (const auto& upper : s.upper) {
                     lookup[row*size + upper.index] = 0;
+                    if (changes || mutablePattern[pr*size+upper.index])
+                        mutablePattern[row*size+upper.index]=true;
                     v(row,upper.index) -= factor * v(pr,upper.index);
                 }
             }
@@ -137,6 +157,10 @@ public:
                 const auto& row=lowers[j];
                 const bool factorChanges=pivotChanges||dynamic[row.slot];
                 const double factor=factorChanges?0:entries[row.slot]*reciprocal;
+                if (!factorChanges && factor == 0.) {
+                    nextUpdate += s.upperEnd - s.upperBegin;
+                    continue;
+                }
                 const int first=static_cast<int>(activeUpdates.size());
                 for (int k=s.upperBegin;k<s.upperEnd;++k) {
                     const int target=updates[nextUpdate++];
@@ -182,6 +206,28 @@ public:
     void startIteration(const std::vector<double>& initial) {
         std::copy(fixed.begin(),fixed.end(),entries.begin());
         std::copy(initial.begin(),initial.end(),rhs.begin());
+    }
+
+    void saveLinearEntries() { linearEntries = entries; }
+
+    void beginDynamicStamp() {
+        recordDynamic = true;
+    }
+
+    void cachePreparedFactorization() {
+        recordDynamic = false;
+        std::vector<int> dynamicSlots;
+        for (const auto& position : original)
+            if (dynamicPattern[position.index * size + position.slot])
+                dynamicSlots.push_back(at(position.index, position.slot));
+        restoreLinearEntries(true);
+        cacheLinearPart(dynamicSlots);
+        std::vector<bool>{}.swap(dynamicPattern);
+    }
+
+    void restoreLinearEntries(bool raw = false) {
+        const auto& initial = raw ? linearEntries : fixed;
+        std::copy(initial.begin(), initial.end(), entries.begin());
     }
 
     void clear() {
@@ -262,6 +308,74 @@ public:
         return true;
     }
 
+    // A nonlinear cutoff can invalidate a formerly sound static pivot.
+    // Refactor the same Jacobian with numeric row pivoting in that case.
+    bool solvePivoted() {
+        const int words=(size+63)/64;
+        std::fill(pivoted.begin(),pivoted.end(),0.);
+        std::fill(nonzero.begin(),nonzero.end(),0);
+        std::fill(used.begin(),used.end(),false);
+        pivotRhs=rhs;
+        for (const auto& p : original) {
+            const double value=entries[at(p.index,p.slot)];
+            if (value!=0) {
+                pivoted[p.index*size+p.slot]=value;
+                nonzero[p.index*words+p.slot/64]|=std::uint64_t{1}<<(p.slot%64);
+            }
+        }
+        for (int i=0;i<size;++i) {
+            const int col=plan[i].column;
+            int row=-1;
+            double best=0.;
+            for (int candidate=0;candidate<size;++candidate) {
+                if (used[candidate]) continue;
+                const double value=std::abs(pivoted[candidate*size+col]);
+                if (value>best) {best=value;row=candidate;}
+            }
+            if (row<0 || best<1e-18 || !std::isfinite(best)) return false;
+            const int preferred=plan[i].row;
+            if (!used[preferred] && std::abs(pivoted[preferred*size+col])>best*.1)
+                row=preferred;
+            used[row]=true;
+            pivotOrder[i]=row;
+            auto* upper=pivoted.data()+row*size;
+            const double main=upper[col];
+            for (int target=0;target<size;++target) {
+                auto* lower=pivoted.data()+target*size;
+                if (used[target] || lower[col]==0.) continue;
+                const double factor=lower[col]/main;
+                pivotRhs[target]-=factor*pivotRhs[row];
+                lower[col]=0;
+                auto* mask=nonzero.data()+target*words;
+                mask[col/64]&=~(std::uint64_t{1}<<(col%64));
+                for (int word=0;word<words;++word) {
+                    auto bits=nonzero[row*words+word];
+                    for (;bits;bits&=bits-1) {
+                        const int index=word*64+std::countr_zero(bits);
+                        if (index!=col) lower[index]-=factor*upper[index];
+                    }
+                    mask[word]|=nonzero[row*words+word];
+                }
+                mask[col/64]&=~(std::uint64_t{1}<<(col%64));
+            }
+        }
+        for (int i=size-1;i>=0;--i) {
+            const int row=pivotOrder[i], col=plan[i].column;
+            auto* upper=pivoted.data()+row*size;
+            double y=pivotRhs[row];
+            for (int word=0;word<words;++word) {
+                auto bits=nonzero[row*words+word];
+                for (;bits;bits&=bits-1) {
+                    const int index=word*64+std::countr_zero(bits);
+                    if (index!=col) y-=upper[index]*x[index];
+                }
+            }
+            x[col]=y/upper[col];
+            if (!std::isfinite(x[col])) return false;
+        }
+        return true;
+    }
+
     int slot(int row,int col) const {
         if (row<0 || col<0) return static_cast<int>(entries.size()-1);
         const int i=at(row,col);
@@ -289,6 +403,8 @@ private:
     int size = 0;
     bool ready = false;
     std::vector<int> lookup, updates;
+    std::vector<bool> dynamicPattern;
+    bool recordDynamic = false;
     std::vector<Row> rows;
     struct Pivot { int row,column,pivot,upperBegin,upperEnd,lowerBegin,lowerEnd; };
     std::vector<Pivot> plan;
@@ -297,6 +413,12 @@ private:
     std::vector<ActiveLower> runtime;
     std::vector<ActivePivot> activePivots;
     std::vector<Terminal> uppers,lowers,activeUpdates;
-    std::vector<double> dense, entries, fixed;
+    std::vector<double> dense, entries, fixed, linearEntries;
+    std::vector<Terminal> original;
+    std::vector<double> pivoted,pivotRhs;
+    std::vector<int> pivotOrder;
+    std::vector<bool> used;
+    std::vector<std::uint64_t> nonzero;
+    std::vector<bool> mutablePattern;
 };
 }

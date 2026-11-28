@@ -1,4 +1,5 @@
 #pragma once
+#include "StampInline.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -9,22 +10,22 @@ constexpr double thermal=1.380649e-23*300.15/1.602176634e-19;
 struct Jet {
     double value, p = 0.0, q = 0.0;
 };
-inline Jet operator+(Jet a, Jet b) { return {a.value+b.value,a.p+b.p,a.q+b.q}; }
-inline Jet operator-(Jet a, Jet b) { return {a.value-b.value,a.p-b.p,a.q-b.q}; }
-inline Jet operator*(Jet a, double b) { return {a.value*b,a.p*b,a.q*b}; }
-inline Jet operator*(Jet a, Jet b) {
+OPTICAL_STAMP_INLINE Jet operator+(Jet a, Jet b) { return {a.value+b.value,a.p+b.p,a.q+b.q}; }
+OPTICAL_STAMP_INLINE Jet operator-(Jet a, Jet b) { return {a.value-b.value,a.p-b.p,a.q-b.q}; }
+OPTICAL_STAMP_INLINE Jet operator*(Jet a, double b) { return {a.value*b,a.p*b,a.q*b}; }
+OPTICAL_STAMP_INLINE Jet operator*(Jet a, Jet b) {
     return {a.value*b.value,a.p*b.value+a.value*b.p,a.q*b.value+a.value*b.q};
 }
-inline Jet operator/(Jet a, Jet b) {
+OPTICAL_STAMP_INLINE Jet operator/(Jet a, Jet b) {
     const double inv = 1.0/b.value, y = a.value*inv;
     return {y,(a.p-y*b.p)*inv,(a.q-y*b.q)*inv};
 }
-inline Jet squareRoot(Jet x) {
+OPTICAL_STAMP_INLINE Jet squareRoot(Jet x) {
     const double value = std::sqrt(x.value), slope = 0.5/value;
     return {value,x.p*slope,x.q*slope};
 }
 
-inline double junctionExp(double x) {
+OPTICAL_STAMP_INLINE double junctionExp(double x) {
     // The forward-junction load bounds x to [-3, 70]. Range reduction
     // keeps r within half a log(2), where this degree-eight series is
     // accurate to better than one part in a billion.
@@ -37,7 +38,7 @@ inline double junctionExp(double x) {
     return (low+fourth*(high+fourth/40320))*power;
 }
 
-inline Jet junction(Jet volts, double emissionVoltage, double saturation) {
+OPTICAL_STAMP_INLINE Jet junction(Jet volts, double emissionVoltage, double saturation) {
     if (saturation == 0) return {0};
     const double x = volts.value/emissionVoltage;
     if (x < -3) {
@@ -51,6 +52,30 @@ inline Jet junction(Jet volts, double emissionVoltage, double saturation) {
     const double exp = junctionExp(limited), slope = saturation*exp/emissionVoltage;
     return {saturation*(exp*(1 + x-limited)-1), slope*volts.p, slope*volts.q};
 }
+OPTICAL_STAMP_INLINE Jet power(Jet x, double exponent) {
+    const double value = std::pow(x.value, exponent);
+    const double slope = exponent * value / x.value;
+    return {value, slope * x.p, slope * x.q};
+}
+
+OPTICAL_STAMP_INLINE Jet depletion(Jet voltage, double zero, double potential, double grading, double fc) {
+    if (zero == 0) return {};
+    const double knee = potential * fc;
+    if (voltage.value < knee) {
+        const double x = 1 - voltage.value / potential;
+        const double slope = zero * std::pow(x, -grading);
+        return {potential * (zero - x * slope) / (1 - grading),
+                slope * voltage.p, slope * voltage.q};
+    }
+    const double f = std::pow(1 - fc, -grading);
+    const double offset = voltage.value - knee;
+    const double curvature = f * grading / (potential * (1 - fc));
+    const double slope = zero * (f + offset * curvature);
+    return {potential * zero * (1 - (1 - fc) * f) / (1 - grading)
+                + zero * offset * (f + 0.5 * offset * curvature),
+            slope * voltage.p, slope * voltage.q};
+}
+
 
 template<double exponent>
 const auto junctionPowerTable=[] {
@@ -60,7 +85,7 @@ const auto junctionPowerTable=[] {
 }();
 
 template<double exponent>
-inline Jet capacitance(Jet volts, double zero, double potential, double fc) {
+OPTICAL_STAMP_INLINE Jet capacitance(Jet volts, double zero, double potential, double fc) {
     if (zero == 0) return {0};
     const double knee = potential*fc;
     double value, slope;

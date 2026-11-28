@@ -1,0 +1,63 @@
+name: Optical Limiter VST3
+on:
+  push:
+    paths:
+      - 'plugin/**'
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - 'manual/**'
+      - 'stage1/models/**'
+      - '.github/workflows/vst3.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: optical-vst3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  operating-point:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ngspice
+      - run: python3 manual/build_fast_deck.py fast.cir && python3 native/seed_deck.py operating-point.raw fast.cir
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optical-operating-point
+          path: operating-point.raw
+          if-no-files-found: error
+
+  windows:
+    needs: operating-point
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: optical-operating-point
+          path: seed
+      - name: Configure the x64 build
+        run: cmake -S . -B build -A x64 -T ClangCL "-DCMAKE_CXX_FLAGS=/EHsc /clang:-mavx2 /clang:-mfma /clang:-fno-math-errno" -DOPTICAL_SPICE_SEED="$PWD/seed/operating-point.raw"
+      - name: Build VST3 and tests
+        run: cmake --build build --config Release --target OpticalLimiter_VST3 OpticalEngineTest OpticalVst3Test --parallel 4
+      - name: Verify dynamics and load the VST3 in a test host
+        shell: pwsh
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bundle = (Resolve-Path "build/OpticalLimiter_artefacts/Release/VST3/Optical Limiter.vst3").Path
+          & build/OpticalVst3Test_artefacts/Release/OpticalVst3Test.exe $bundle "$PWD/Optical-Limiter-GUI.png"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item $bundle package -Recurse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Optical-Limiter-0.1.9-Windows-x64-VST3
+          path: package/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Optical-Limiter-GUI
+          path: Optical-Limiter-GUI.png
+          if-no-files-found: error

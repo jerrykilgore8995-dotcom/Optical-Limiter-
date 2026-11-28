@@ -15,7 +15,9 @@ def read(path, title=False):
     current=top
     for line in lines:
         t=line.split(); cmd=t[0].lower()
-        if cmd=='.include':read((path.parent/t[1]).resolve())
+        if cmd=='.include':
+            include=line.split(maxsplit=1)[1].strip('"')
+            read((path.parent/include).resolve())
         elif cmd=='.subckt':
             pos=next((i for i,v in enumerate(t) if v.lower()=='params:'),len(t))
             body=[];sub[t[1].lower()]={'pins':t[2:pos],'defaults':t[pos+1:],'body':body};current=body
@@ -24,7 +26,8 @@ def read(path, title=False):
         elif cmd in ('.op','.tran','.end'):continue
         elif cmd in ('.option','.options'):options.append(line)
         else:current.append(line)
-read(root/'manual/manual.cir',True)
+source = Path(sys.argv[2]).resolve() if len(sys.argv)>2 else root/'manual/manual.cir'
+read(source,True)
 devices=[];parameters={}
 def expand(lines,prefix='',mapping=None,scope=None):
     mapping=mapping or {};scope=dict(scope or {})
@@ -85,7 +88,7 @@ expand(top)
 for d in devices:
     if 'model' in d:assert d['model'] in models,d
 from collections import Counter
-out={'source':'manual/manual.cir','parameters':parameters,'functions':functions,'options':options,'models':models,'devices':devices,'counts':dict(Counter(d['kind'] for d in devices))}
+out={'source':source.name,'parameters':parameters,'functions':functions,'options':options,'models':models,'devices':devices,'counts':dict(Counter(d['kind'] for d in devices))}
 dest=Path(sys.argv[1]) if len(sys.argv)>1 else root/'native/deck.json'
 dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(json.dumps(out,indent=2))
 print('Flattened device counts:',out['counts'],'models:',len(models))
