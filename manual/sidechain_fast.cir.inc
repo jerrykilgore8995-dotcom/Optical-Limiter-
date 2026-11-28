@@ -23,10 +23,17 @@ RAF avgin avgo 5.71k
 CAF avgo 0 22p
 * The closed precision loop reduces incremental charging resistance.
 * Keep the 100-ohm current limit and the measured peak-release network.
-* Effective closed-loop settling of the compensated peak amplifier.
-RPKIN rect pkref 330
-CPKFB pkref 0 680p
-Bcharge 0 hold I={min(max(V(pkref,hold),0)/8,max(13.5-V(hold),0)/100)}
+* Compact two-state fit to peak-amplifier recovery at the rectifier transition.
+* The band-pass and high-pass terms reproduce the positive charging pulse.
+CPKFB pkcomp 0 680p
+Cpkvel pkvel 0 680p
+Gpkint 0 pkcomp pkvel 0 0.0001875708347
+Gpkfeed 0 pkvel hfout 0 0.0001875708347
+Gpkrestore pkvel 0 pkcomp 0 0.0001875708347
+Gpkdamp pkvel 0 pkvel 0 0.0006098911232
+Epkedge pkedge 0 POLY(3) (hfout,0) (pkcomp,0) (pkvel,0) 0 8.69355234 -8.69355234 -22.793954
+* Fit the edge strength over the measured range, including weak pulses and compression at high drive.
+Bcharge 0 hold I={min(max(max(V(rect),1.02*V(pkedge)+max(0,min(0.45*(V(pkedge)-0.04),0.28*(0.18-V(pkedge))))-0.57*max(V(pkedge)-0.62,0))-V(hold),0)/8,max(13.5-V(hold),0)/100)}
 CP hold 0 100n
 RP hold 0 47k
 Epkbuf pkout 0 hold 0 1

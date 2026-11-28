@@ -20,6 +20,6 @@ Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to c
 
 ## Reduced sidechain
 
-The BJT receiver, optical audio stage, makeup and output amplifiers retain their manufacturer models. The reduced sidechain uses buffered RC stages, a piecewise precision rectifier and a current-limited peak-charge model. It retains the detector selection by ratio, HPF, timing states and photocell conductance curve. SPICE and the VST3 use the same reduced deck. `manual/manual.cir` is the full vendor reference for comparison. The reduced model approximates the vendor stages' switching transients and low-level distortion.
+The BJT receiver, optical audio stage, makeup and output amplifiers retain their manufacturer models. The reduced sidechain uses buffered RC stages, a piecewise precision rectifier and a current-limited peak-charge model. A two-state response approximates the compensated peak amplifier's extra charge at fast rectifier transitions. It retains the detector selection by ratio, HPF, timing states and photocell conductance curve. SPICE and the VST3 use the same reduced deck. `manual/manual.cir` is the full vendor reference for comparison. The reduced model approximates the vendor stages' switching transients and low-level distortion.
 
 The packaged VST3 test reports median and maximum block times for mono, driven stereo, and threshold-off response. It also measures the 1 to 20 kHz through response and verifies bypass delay at 44.1 and 88.2 kHz.
