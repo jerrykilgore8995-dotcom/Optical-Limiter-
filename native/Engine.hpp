@@ -19,8 +19,9 @@ public:
         std::array<double, unknownCount + fixedCount> solution, previous, older;
         std::array<MNA::Companion, companionCount> companions;
         Detector detector;
+        EvenResponse evenResponse;
         Settings settings;
-        double lastInput, lastDelta;
+        double lastInput, lastDelta, makeupGain;
         unsigned failures, refined;
     };
 
@@ -30,7 +31,9 @@ public:
         std::copy(older.begin(), older.end(), state.older.begin());
         std::copy(m.companions.begin(), m.companions.end(), state.companions.begin());
         state.detector = detector;
+        state.evenResponse = evenResponse;
         state.settings = settings;
+        state.makeupGain = makeupGain;
         state.lastInput = lastInput;
         state.lastDelta = lastDelta;
         state.failures = failures;
@@ -43,6 +46,8 @@ public:
         std::copy(state.older.begin(), state.older.end(), older.begin());
         std::copy(state.companions.begin(), state.companions.end(), m.companions.begin());
         detector = state.detector;
+        evenResponse = state.evenResponse;
+        makeupGain = state.makeupGain;
         settings = state.settings;
         lastInput = state.lastInput;
         lastDelta = state.lastDelta;
@@ -58,6 +63,7 @@ public:
         previous = older = trialStart = refinementStart = m.v;
         settings = {};
         detector = {};
+        evenResponse = {};
         detector.configure(settings);
         lastInput = lastDelta = 0;
         failures = refined = 0;
@@ -69,6 +75,7 @@ public:
         accept(true);
         previous = older = m.v;
         settings = controls;
+        makeupGain = std::pow(10., settings.makeup / 20.);
         if (settings.ff <= .5) settings.soft = 0;
         detector.configure(settings);
         if (!newton(0, 0, 70))
@@ -87,6 +94,7 @@ public:
         if (settings.gdb != next.gdb || settings.ff != next.ff || settings.ratio != next.ratio
                 || settings.soft != next.soft || settings.sens != next.sens || settings.hpf != next.hpf
                 || settings.att != next.att || settings.rel != next.rel || settings.makeup != next.makeup) {
+            if (settings.makeup != next.makeup) makeupGain = std::pow(10., next.makeup / 20.);
             settings = next;
             detector.configure(settings);
             lastDelta = 0;
@@ -112,7 +120,7 @@ public:
             if (!solved) {
                 restoreSample();
                 ++failures;
-                return voltage(outputNode);
+                return voltage(outputNode) + evenResponse.output;
             }
             ++refined;
         }
@@ -120,7 +128,8 @@ public:
         previous = m.v;
         lastDelta = delta;
         lastInput = input;
-        return voltage(outputNode);
+        return voltage(outputNode) + evenResponse.step(detector.state.cellDistortion.fit,
+            m.voltage(grNode) - m.voltage(sumNode), cg(m.voltage(cellNode)), inverse, makeupGain);
     }
 
     double voltage(int node) const {
@@ -151,7 +160,8 @@ public:
 private:
     void accept(bool dc) {
         m.acceptCompanions(dc);
-        detector.accept(m.voltage(preNode), m.voltage(grNode));
+        detector.accept(m.voltage(preNode), m.voltage(grNode),
+                        m.voltage(grNode) - m.voltage(sumNode), m.voltage(cellNode));
     }
 
     void restoreSample() {
@@ -287,6 +297,8 @@ private:
     Sparse subdivisionMatrix;
     Settings settings;
     Detector detector;
+    EvenResponse evenResponse;
+    double makeupGain = 1.;
     Detector::State savedDetector;
     LinearStamp fixedStamps{0, 0};
     std::vector<double> previous, older, trialStart, refinementStart;

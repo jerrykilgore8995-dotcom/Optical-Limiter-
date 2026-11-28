@@ -12,24 +12,52 @@ namespace {
 bool checkControlRipple() {
     constexpr double rate = 88200.;
     constexpr double inverse = 2. * rate;
-    for (const double frequency : {100., 1000.}) {
+    for (const double frequency : {20., 40., 50., 100., 1000.}) {
         optical::ControlRipple ripple;
-        double error = 0.;
+        double total = 0., energy = 0.;
         int count = 0;
-        for (int i = 0; i < static_cast<int>(rate * .25); ++i) {
+        for (int i = 0; i < static_cast<int>(rate * .6); ++i) {
             const double phase = 2. * std::numbers::pi * frequency * i / rate;
             double timing = .8;
             for (int harmonic = 2; harmonic <= 18; harmonic += 2)
                 timing += .02 * std::cos(harmonic * phase) / harmonic;
             const double output = ripple.output(timing, inverse);
-            if (frequency == 1000. && output != timing) return false;
-            if (i >= static_cast<int>(rate * .15)) {
-                error += (output - .8) * (output - .8);
+            if (i >= static_cast<int>(rate * .45)) {
+                const double offset = output - .8;
+                total += offset;
+                energy += offset * offset;
                 ++count;
             }
             ripple.accept(std::sin(phase), timing, inverse);
         }
-        if (frequency == 100. && std::sqrt(error / count) > .00001) return false;
+        const double offset = total / count;
+        if (std::abs(offset) > .01 || energy / count - offset * offset > 1e-10) return false;
+    }
+    return true;
+}
+
+bool checkCellFit() {
+    constexpr double rate = 88200.;
+    constexpr int count = 8820;
+    constexpr double peak = .5 * std::numbers::sqrt2;
+    for (const double resistance : {3000., 30000.}) {
+        optical::CellDistortion model;
+        double k2 = 0., k4 = 0.;
+        double previous = 0.;
+        for (int i = 0; i < count * 4; ++i) {
+            const double phase = 2. * std::numbers::pi * 1000. * i / rate;
+            const double volts = peak * std::cos(phase);
+            if (i >= count * 3) {
+                const double correction = model.fit.evenAc(volts);
+                k2 += correction * std::cos(2. * phase);
+                k4 += correction * std::cos(4. * phase);
+            }
+            model.accept(volts, 1. / resistance, 2. * rate, previous < 0. && volts >= 0., 1000.);
+            previous = volts;
+        }
+        const double total = 2. * std::hypot(k2, k4) / (count * peak);
+        const double target = resistance == 3000. ? .0000495 : .0001705;
+        if (std::abs(total / target - 1.) > .01 || std::abs(k4 / k2 - .2) > .002) return false;
     }
     return true;
 }
@@ -38,6 +66,7 @@ bool checkControlRipple() {
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--ripple") return checkControlRipple() ? 0 : 1;
+    if (argc == 2 && std::string_view(argv[1]) == "--cell-fit") return checkCellFit() ? 0 : 1;
     if (argc < 8 || argc > 10 || (argc == 10 && std::string_view(argv[9]) != "burst")) {
         std::cerr << "Usage: OpticalEngineTest FF soft ratio sensitivity input_dBu seconds sample_rate [frequency] [burst]\n";
         return 2;

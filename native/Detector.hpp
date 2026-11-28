@@ -2,8 +2,8 @@
 
 #include "FullDeck.hpp"
 #include "ControlRipple.hpp"
+#include "PeakCalibration.hpp"
 
-#include <array>
 #include <type_traits>
 
 namespace optical {
@@ -38,16 +38,11 @@ public:
     struct Result { double target, preSlope, grSlope; };
     template<class V> struct StateVariable { V value{}, slope{}; };
     using History = StateVariable<double>;
-    template<class V> struct PeakState {
-        StateVariable<V> half, rect, position, velocity, hold;
-    };
     struct State {
-        History hp, hf, half, rect, avg, avgo, sub, over, ratio, timing;
-        PeakState<double> peak;
+        History hp, hf, avg, sub, over, ratio, timing;
+        double peak = 0., peakGain = 1.;
         ControlRipple ripple;
-        std::array<double, 7> hfPast{};
-        double hfRate = 0.;
-        std::size_t hfValid = 0;
+        CellDistortion cellDistortion;
         double level = 1e-9;
     };
 
@@ -59,12 +54,11 @@ public:
             tunedRate = inverse;
             const auto gain = settings.ff > .5 ? 1. - 1. / settings.ratio : settings.ratio - 1.;
             ratioGain = gain;
+            constexpr double discharge = 1. / (rp * cp);
+            peakDecay = inverse > 0. ? (inverse - discharge) / (inverse + discharge) : 0.;
             hp.tune(inverse, 6.283185307 * std::max(10., settings.hpf));
             hf.tune(inverse, 1. / (rhf * cfb));
-            half.tune(inverse, 1. / (rhalf * chb));
-            rect.tune(inverse, 1. / (rrect * crect));
             avg.tune(inverse, 1. / (ra * ca));
-            avgo.tune(inverse, 1. / (raf * caf));
             sub.tune(inverse, 1. / (rsub * csub));
             over.tune(inverse, 1. / (rif * cif));
             ratio.tune(inverse, 1. / (10000. * gain * crrf));
@@ -73,15 +67,12 @@ public:
             const double top = std::max(.01, 50000. * (1. - settings.sens / 30.));
             const double bottom = std::max(.01, 50000. * settings.sens / 30.);
             threshold = 3. * bottom / (top + bottom);
-            peak.tune(inverse * peakSteps);
         }
         hp.begin(state.hp, inverse); hf.begin(state.hf, inverse);
-        half.begin(state.half, inverse); rect.begin(state.rect, inverse);
-        avg.begin(state.avg, inverse); avgo.begin(state.avgo, inverse);
+        avg.begin(state.avg, inverse);
         sub.begin(state.sub, inverse); over.begin(state.over, inverse);
         ratio.begin(state.ratio, inverse); attack.begin(state.timing, inverse);
         release.begin(state.timing, inverse);
-        peak.begin(state, inverse);
         if (settings.sens <= 0.) darkTarget = targetFor(timeFor(commandFor(ratio(0.)))).value;
     }
 
@@ -92,21 +83,19 @@ public:
         return {target.value, settings.ff * target.slope, (1. - settings.ff) * target.slope};
     }
 
-    void accept(double pre, double gr) {
+    void accept(double pre, double gr, double cellVolts = 0., double cellConductance = 2e-8) {
         const auto sample = evaluate<true>(selected(pre, gr));
-        if (state.hfRate != tunedRate) state.hfValid = 0;
-        state.hfRate = tunedRate;
-        std::copy_backward(state.hfPast.begin(), state.hfPast.end() - 1, state.hfPast.end());
-        state.hfPast[0]=sample.hf;
-        state.hfValid = std::min(state.hfPast.size(), state.hfValid + 1);
         save(state.hp, sample.hp); save(state.hf, sample.hf);
-        save(state.half, sample.half); save(state.rect, sample.rect);
-        save(state.avg, sample.avg); save(state.avgo, sample.avgo);
+        save(state.avg, sample.avg);
         state.peak = sample.peak;
         save(state.sub, sample.sub);
         save(state.over, sample.over); save(state.ratio, sample.ratio);
         save(state.timing, sample.timing);
-        state.ripple.accept(sample.hf, sample.timing, tunedRate);
+        const bool crossing = state.ripple.accept(sample.hf, sample.timing, tunedRate,
+                                                  settings.ff > .5 ? 1. : settings.ratio, settings.ratio >= 8.);
+        const double frequency = state.ripple.frequency();
+        if (crossing && settings.ratio >= 8.) state.peakGain = peakCalibration(frequency, state.peak);
+        state.cellDistortion.accept(cellVolts, cellConductance, tunedRate, crossing, frequency);
         state.level = sample.level;
     }
 
@@ -126,9 +115,9 @@ private:
     };
 
     template<class V> struct Sample {
-        V hp, hf, half, rect, avg, avgo;
+        V hp, hf, avg, avgo;
         V sub, over, ratio, timing, level;
-        PeakState<V> peak;
+        V peak;
     };
     static double value(double v) { return v; }
     static double value(DetectorVoltage v) { return v.value; }
@@ -161,16 +150,15 @@ private:
         Sample<V> r{};
         r.hp = hp(input);
         r.hf = hf((settings.hpf > 0 ? input - r.hp : input) * -1.);
-        r.half = half(max(r.hf, V{0.}));
-        r.rect = rect(r.half * 2. - r.hf);
+        const auto rectified = max(r.hf, r.hf * -1.);
         if (AdvanceAll || settings.ratio < 8.) {
-            r.avg = avg(r.rect);
-            r.avgo = avgo(r.avg * eavg1);
+            r.avg = avg(rectified);
+            r.avgo = r.avg * eavg1;
         }
         if (AdvanceAll || settings.ratio >= 8.) {
-            r.peak = peak.advance(state.peak, r.hf);
+            r.peak = max(rectified, V{state.peak * peakDecay});
         }
-        r.level = max(settings.ratio < 8. ? r.avgo : r.peak.hold.value, V{1e-9});
+        r.level = max(settings.ratio < 8. ? r.avgo : r.peak * state.peakGain, V{1e-9});
         r.sub = sub(log10(max(V{.001}, min(V{15.}, r.level))) * -2. - threshold);
         r.over = over(r.sub * -1.);
         const auto above = max(V{-15.}, min(V{15.}, r.over)) * 10.;
@@ -191,115 +179,9 @@ private:
         h.value = value;
     }
 
-    // Resolve the short charge pulse on smaller intervals while keeping the
-    // circuit's audio rate, interpolator and trapezoidal companions intact.
-    static constexpr int peakSteps = 4;
-    class PeakIntegrator {
-    public:
-        void tune(double inverse) {
-            using namespace detector_model;
-            rate = inverse;
-            pole(1. / (rhalf * chb), halfGain, halfHistory);
-            pole(1. / (rrect * crect), rectGain, rectHistory);
-            constexpr double discharge = 1. / (rp * cp);
-            constexpr double charging = 1. / (8. * cp);
-            constexpr double driveLimit = 1. / (100. * cp);
-            freeGain = 1. / (inverse + discharge);
-            chargeHistory = 1. / (inverse + discharge + charging);
-            chargeGain = charging * chargeHistory;
-            limitHistory = 1. / (inverse + discharge + driveLimit);
-            limitBias = 13.5 * driveLimit * limitHistory;
-            if (inverse > 0.) {
-                positionCoupling = (gpkint1 / cpkfb) / inverse;
-                velocityHistory = 1. / (inverse + gpkdamp1 / cpkvel + (gpkint1 / cpkvel) * positionCoupling);
-                velocityGain = gpkint1 / cpkvel * velocityHistory;
-                invRate = 1. / inverse;
-            }
-        }
-
-        void begin(const State& state, double mainRate) {
-            // Causal fractional-delay FIR at quarter-sample positions. Fit through
-            // 0.47 pi rad/sample with unity DC gain and the intended DC delay.
-            static constexpr double weights[peakSteps - 1][8] = {
-                {0.087044829961725939, 1.2177424344667742, -0.56808518142735165, 0.47088371753083397, -0.3344693796132695, 0.18051674528844114, -0.066442592896427968, 0.012817917320156981},
-                {0.2614342092785068, 1.2232409791429912, -0.95424666841387562, 0.8567513280241239, -0.62970078738126078, 0.34668231057488869, -0.1293934744134787, 0.025249894381531784},
-                {0.55552474059080603, 0.86924117290026393, -0.87470710236641158, 0.83535386375161547, -0.63217698297898051, 0.3543177097555506, -0.13396380258539459, 0.026430258051734802}
-            };
-            if (state.hfRate == mainRate && state.hfValid == state.hfPast.size()) {
-                for (int i = 0; i < peakSteps - 1; ++i) {
-                    double offset = 0.;
-                    for (std::size_t j = 0; j < state.hfPast.size(); ++j)
-                        offset += weights[i][j + 1] * state.hfPast[j];
-                    interpolation[i] = {offset, weights[i][0]};
-                }
-                return;
-            }
-            // A step-size change invalidates the uniform FIR history.
-            for (int i = 0; i < peakSteps - 1; ++i) {
-                const double f = static_cast<double>(i + 1) / peakSteps;
-                const double h01 = f * f * (3. - 2. * f);
-                const double h11 = f * f * (f - 1.);
-                const double tangent = mainRate == 0. ? 0. : state.hf.slope * 2. / mainRate;
-                const double gain = h01 + 2. * h11;
-                interpolation[i] = {state.hf.value * (1. - gain) + tangent * f * (1. - f), gain};
-            }
-        }
-
-        template<class V>
-        PeakState<V> advance(const PeakState<double>& history, V input) const {
-            PeakState<V> state{copy<V>(history.half), copy<V>(history.rect), copy<V>(history.position),
-                               copy<V>(history.velocity), copy<V>(history.hold)};
-            if (rate > 0.) {
-                for (const auto& entry : interpolation)
-                    tick(state, input * entry.slope + entry.value);
-            }
-            tick(state, input);
-            return state;
-        }
-
-    private:
-        void pole(double g, double& input, double& history) const {
-            history = 1. / (rate + g);
-            input = g * history;
-        }
-        template<class V> static StateVariable<V> copy(const History& h) { return {V{h.value}, V{h.slope}}; }
-        template<class V> V past(const StateVariable<V>& state) const {
-            return rate == 0. ? V{0.} : state.value * rate + state.slope;
-        }
-        template<class V> void update(StateVariable<V>& s, V next) const {
-            s.slope = rate == 0. ? V{0.} : (next - s.value) * rate - s.slope;
-            s.value = next;
-        }
-        template<class V> void tick(PeakState<V>& s, V hf) const {
-            using namespace detector_model;
-            update(s.half, max(hf, V{0.}) * halfGain + past(s.half) * halfHistory);
-            update(s.rect, (s.half.value * 2. - hf) * rectGain + past(s.rect) * rectHistory);
-            if (rate > 0.) {
-                const auto previousPosition = past(s.position) * invRate;
-                update(s.velocity, (hf - previousPosition) * velocityGain + past(s.velocity) * velocityHistory);
-                update(s.position, previousPosition + s.velocity.value * positionCoupling);
-            } else {
-                update(s.position, hf);
-                update(s.velocity, V{0.});
-            }
-            const auto edge = hf * epkedge1 + s.position.value * epkedge2 + s.velocity.value * epkedge3;
-            const auto target = max(bcrest(s.rect.value, hf, s.position.value), bpkdrive(bpkshift(edge, hf)));
-            const auto bias = past(s.hold);
-            update(s.hold, max(bias * freeGain,
-                               min(bias * limitHistory + limitBias, target * chargeGain + bias * chargeHistory)));
-        }
-
-        std::array<History, peakSteps - 1> interpolation{};
-        double rate = 0., invRate = 0.;
-        double halfGain = 0., halfHistory = 0., rectGain = 0., rectHistory = 0.;
-        double positionCoupling = 0., velocityHistory = 0., velocityGain = 0.;
-        double freeGain = 0., chargeHistory = 0., chargeGain = 0., limitHistory = 0., limitBias = 0.;
-    };
-
     Settings settings;
-    Pole hp, hf, half, rect, avg, avgo, sub, over, ratio, attack, release;
-    PeakIntegrator peak;
-    double tunedRate = -1., threshold = 0., ratioGain = 0., darkTarget = 2e-8;
+    Pole hp, hf, avg, sub, over, ratio, attack, release;
+    double peakDecay = 0., tunedRate = -1., threshold = 0., ratioGain = 0., darkTarget = 2e-8;
 };
 
 } // namespace optical

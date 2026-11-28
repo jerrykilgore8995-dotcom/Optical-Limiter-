@@ -157,7 +157,7 @@ out=['#pragma once','#include "MNA.hpp"','#include <cmath>','#include <algorithm
 'inline double min(double a,double b){return std::min(a,b);} inline double max(double a,double b){return std::max(a,b);}',
 'inline double cg(double x){return min(.005,max(2e-8,x));} inline double cs(double x){return min(4,max(0,x));}',
 f'inline constexpr int nodeCount={len(nodes)}, unknownCount={len(nodes)+len(branches)}, fixedCount={len(known)};',
-f'inline constexpr int outputNode={ix("out")}, preNode={ix("pre")}, grNode={ix("gr")}, cellNode={ix("cell")};',
+f'inline constexpr int outputNode={ix("out")}, preNode={ix("pre")}, grNode={ix("gr")}, cellNode={ix("cell")}, sumNode={ix("sum")};',
 f'inline constexpr int timingNode={-2 if condense else ix("timing")}, detectorNode={-3 if condense else ix("det")};',
 'inline constexpr std::array<double,unknownCount> dcBias{'+','.join(num(x) for x in bias())+'};',
  'inline constexpr std::array<const char*,unknownCount> unknownNames{'+','.join('"'+x+'"' for x in [*nodes,*branches])+'};']
@@ -260,9 +260,7 @@ for x in stamps:
         line.append(f'm.source({a},{b},{key},target);m.derivative({key},-1,preNode,-1,-targetPre,true);'
                     f'm.derivative({key},-1,grNode,-1,-targetGr,true);')
     elif name == 'bldr' and 'ldr_even_30k' in d['parameters']:
-        even = ','.join(expr(d['parameters'][key])
-                        for key in ('ldr_even_30k', 'ldr_even_3k', 'ldr_even_knee'))
-        line.append(f'm.photocell({a},{b},{ix("cell")},{even});')
+        line.append(f'm.linearPhotocell({a},{b},{ix("cell")});')
     elif k=='b':
         mode,body=raw.split('=',1)
         refs=[]

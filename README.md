@@ -22,12 +22,12 @@ Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to c
 
 ## Photocell harmonics
 
-The reduced deck adds a small polarity asymmetry to the VTL5C1 current–voltage equation. Its low-voltage scale follows the 3 kΩ and 30 kΩ traces in PerkinElmer Figure 3(a). The odd component of the photocell equation and the manufacturer semiconductor models retain their original form. The K2/K4/K6 partition is an estimate because the source plots total distortion. Outside the two resistance anchors the coefficient is held at the nearest anchor.
+The native photocell fit uses the terminal RMS voltage and conductance. Digitized Figure 3(a) traces provide the total THD target as a function of these two inputs. The fit allocates the cell correction to K2 and a smaller K4. The chart does not resolve the harmonic split. Outside its resistance range the nearest trace is used. Voltages above the printed range are held at the last point. The 10 kHz K2 reference applies to the deeply lit region outside the measured resistance range.
 
-The VST3 applies a digital notch bank to the gain command when the detector is tracking a stable tone between 45 and 300 Hz. The notches follow the even multiples from the second through the eighteenth in the control signal. A soft transition favors the raw timing control during larger changes. The vendor reference and printed reduced SPICE deck do not include these digital notches.
+The main audio circuit solves the original odd current law. The even correction follows the photocell current through a linearized feedback and output network. This avoids moving the existing odd harmonics through interaction with the added even current at high drive.
 
-## Reduced sidechain
+## Digital sidechain
 
-The BJT receiver, optical audio stage, makeup and output amplifiers retain their manufacturer models. The sidechain uses buffered RC stages, a precision rectifier and a current-limited peak-charge model with both edge and crest charging. The native solver eliminates these sidechain equations algebraically. It solves the remaining 129 audio and control unknowns with the detector's derivative in the Newton matrix. Trapezoidal detector history advances only when a circuit step is accepted.
+The average detector uses an ideal full-wave rectifier and the peak detector an ideal peak follower with its original discharge time. The threshold, ratio curves and attack/release equations remain in the control path. A small steady-state peak calibration preserves the measured response of the reference at high frequencies. The control uses a cycle mean while a tone is stable. The unfiltered audio signal continues to drive detection. Large level changes and loss of periodicity restore the timing calculation directly.
 
-The peak branch integrates four intervals per native step with causal interpolation to resolve short charge pulses. The audio rate and oversampling are shared with the average detector. Detector selection by ratio, HPF, timing and the photocell conductance curve follow the reduced SPICE deck. See `manual/manual.cir` for the full vendor reference.
+The original SPICE reference and the generated reference deck retain the component-level behavior for comparison.

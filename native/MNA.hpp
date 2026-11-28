@@ -1,6 +1,7 @@
 #pragma once
 #include "StampInline.hpp"
 #include "DeviceMath.hpp"
+#include "CellDistortion.hpp"
 #include "Sparse.hpp"
 #include <vector>
 #include <stdexcept>
@@ -137,26 +138,13 @@ struct MNA {
             if(k>=0)derivative(k,-1,n,-1,-g,true);else derivative(a,b,n,-1,g,true);
         }
     }
-    OPTICAL_STAMP_INLINE void photocell(int a, int b, int control, double at30k,
-                                          double at3k, double knee) {
-        const double volts = voltage(a) - voltage(b);
+    OPTICAL_STAMP_INLINE void linearPhotocell(int a, int b, int control) {
         const double rawG = voltage(control);
         const double g = std::clamp(rawG, 2e-8, .005);
-        constexpr double low = 1. / 30000.;
-        constexpr double high = 1. / 3000.;
-        const double blend = std::clamp((g - low) / (high - low), 0., 1.);
-        const double asymmetry = at30k + (at3k - at30k) * blend;
-        const double asymmetrySlope = g > low && g < high ? (at3k - at30k) / (high - low) : 0.;
-        const double square = volts * volts;
-        const double invMagnitude = 1. / std::sqrt(square + knee * knee);
-        const double even = square * invMagnitude;
-        const double evenSlope = volts * invMagnitude * (2. - square * invMagnitude * invMagnitude);
-        const double currentPerSiemens = volts + asymmetry * even;
-        residual(a, b, g * currentPerSiemens);
-        derivative(a, b, a, b, g * (1. + asymmetry * evenSlope), true);
-        const double slope = rawG > 2e-8 && rawG < .005
-            ? currentPerSiemens + g * asymmetrySlope * even : 0.;
-        derivative(a, b, control, -1, slope, true);
+        const double volts = voltage(a) - voltage(b);
+        residual(a, b, g * volts);
+        derivative(a, b, a, b, g, true);
+        derivative(a, b, control, -1, rawG > 2e-8 && rawG < .005 ? volts : 0., true);
     }
 
     void diode(int a,int b,double is,double n) {
