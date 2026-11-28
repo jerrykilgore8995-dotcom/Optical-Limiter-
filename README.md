@@ -4,6 +4,8 @@ Manual optical compressor and limiter based on the project’s accepted SPICE ci
 
 The plugin aligns a full-scale digital sine with +24 dBu at unity input. Threshold is the circuit’s sensitivity in dB below its reference. The zero-sensitivity position switches gain reduction off. Output controls the circuit makeup stage. Both meters report optical gain reduction before makeup from the solved LDR conductance. At host rates below 88.2 kHz the engine runs at twice the host rate with a linear-phase half-band FIR in each direction. At 44.1 kHz the circuit solves at 88.2 kHz and the plugin reports 96 samples of latency. The Signal Path switch delays dry audio by that same amount for host alignment.
 
+In stereo, an independent solver can assist the callback by processing the right channel while the callback processes the left. It publishes completed audio and circuit history in sections. The callback can finish from the latest published section without waiting and reports the same signal latency.
+
 ## Build and test
 
 Requires CMake 3.22 or newer, Python 3.10 or newer, a C++20 compiler, and ngspice to export the operating point. A pre-exported operating point can be supplied with `-DOPTICAL_SPICE_SEED=/path/to/operating-point.raw`. CMake fetches JUCE 8.0.10 and generates native stamps from the reduced sidechain deck. The pre-exported seed must come from that deck. Generate a standalone ngspice input with `python manual/build_fast_deck.py build/Optical-Limiter-Fast.cir`. The generated file refers to the vendor libraries in this checkout.

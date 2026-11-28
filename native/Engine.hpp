@@ -13,6 +13,43 @@ inline constexpr double fullScalePeakVolts = 17.370675219607563; // +24 dBu for 
 
 class Engine {
 public:
+    // Only accepted history is needed to continue processing on a
+    // separately prepared solver. Matrix scratch stays thread-local.
+    struct State {
+        std::array<double, unknownCount + fixedCount> solution, previous, older;
+        std::array<MNA::Companion, companionCount> companions;
+        Detector detector;
+        Settings settings;
+        double lastInput, lastDelta;
+        unsigned failures, refined;
+    };
+
+    void save(State& state) const {
+        std::copy(m.v.begin(), m.v.end(), state.solution.begin());
+        std::copy(previous.begin(), previous.end(), state.previous.begin());
+        std::copy(older.begin(), older.end(), state.older.begin());
+        std::copy(m.companions.begin(), m.companions.end(), state.companions.begin());
+        state.detector = detector;
+        state.settings = settings;
+        state.lastInput = lastInput;
+        state.lastDelta = lastDelta;
+        state.failures = failures;
+        state.refined = refined;
+    }
+
+    void restore(const State& state) {
+        std::copy(state.solution.begin(), state.solution.end(), m.v.begin());
+        std::copy(state.previous.begin(), state.previous.end(), previous.begin());
+        std::copy(state.older.begin(), state.older.end(), older.begin());
+        std::copy(state.companions.begin(), state.companions.end(), m.companions.begin());
+        detector = state.detector;
+        settings = state.settings;
+        lastInput = state.lastInput;
+        lastDelta = state.lastDelta;
+        failures = state.failures;
+        refined = state.refined;
+    }
+
     bool prepare(double sampleRate, const Settings& controls) {
         inverse = 2 * sampleRate;
         m = MNA(unknownCount, fixedCount);

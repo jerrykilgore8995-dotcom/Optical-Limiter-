@@ -1,5 +1,5 @@
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "RateAdaptedEngine.hpp"
+#include "StereoWorker.hpp"
 #include "BinaryData.h"
 
 #include <array>
@@ -60,18 +60,21 @@ public:
             && (channels == juce::AudioChannelSet::mono() || channels == juce::AudioChannelSet::stereo());
     }
 
-    void prepareToPlay(double rate, int) override {
+    void prepareToPlay(double rate, int blockSize) override {
+        stereoWorker.stop();
         ready = true;
         const auto settings = readSettings();
         for (int ch = 0; ch < getTotalNumInputChannels(); ++ch) {
             ready = engines[static_cast<std::size_t>(ch)].prepare(rate, settings) && ready;
         }
+        if (ready && getTotalNumInputChannels() == 2) stereoWorker.prepare(rate, settings, blockSize);
         setLatencySamples(optical::RateAdaptedEngine::latencyForRate(rate));
         status.store(ready, std::memory_order_relaxed);
         for (auto& meter : meters) meter.store(0, std::memory_order_relaxed);
     }
 
     void releaseResources() override {
+        stereoWorker.stop();
         ready = false;
         status.store(false, std::memory_order_relaxed);
     }
@@ -86,17 +89,17 @@ public:
             return;
         const auto settings = readSettings();
         bool converged = true;
+        const int frames = audio.getNumSamples();
+        const bool submitted = audio.getNumChannels() == 2
+            && stereoWorker.submit(engines[1], settings, audio.getReadPointer(1), frames);
         for (int ch = 0; ch < audio.getNumChannels(); ++ch) {
             const auto index = static_cast<std::size_t>(ch);
             auto& engine = engines[index];
-            engine.configure(settings);
-            float* samples = audio.getWritePointer(ch);
             const auto before = engine.failedSteps();
-            for (int i = 0; i < audio.getNumSamples(); ++i) {
-                const double input = std::isfinite(samples[i]) ? static_cast<double>(samples[i]) : 0.;
-                samples[i] = static_cast<float>(engine.step(input * optical::fullScalePeakVolts)
-                                                 / optical::fullScalePeakVolts);
-            }
+            float* samples = audio.getWritePointer(ch);
+            const int done = ch == 1 && submitted ? stereoWorker.collect(engine, samples) : 0;
+            engine.configure(settings);
+            engine.process(samples + done, frames - done);
             converged = engine.failedSteps() == before && converged;
             meters[index].store(static_cast<float>(engine.reductionDb()), std::memory_order_relaxed);
         }
@@ -107,15 +110,8 @@ public:
     void processBlockBypassed(juce::AudioBuffer<float>& audio, juce::MidiBuffer&) override {
         zeroMeters();
         if (!ready) return;
-        for (int ch = 0; ch < audio.getNumChannels(); ++ch) {
-            auto& engine = engines[static_cast<std::size_t>(ch)];
-            float* samples = audio.getWritePointer(ch);
-            for (int i = 0; i < audio.getNumSamples(); ++i) {
-                const double input = std::isfinite(samples[i]) ? static_cast<double>(samples[i]) : 0.;
-                samples[i] = static_cast<float>(engine.step(input * optical::fullScalePeakVolts, true)
-                                                 / optical::fullScalePeakVolts);
-            }
-        }
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+            engines[static_cast<std::size_t>(ch)].process(audio.getWritePointer(ch), audio.getNumSamples(), true);
     }
 
     void getStateInformation(juce::MemoryBlock& data) override {
@@ -179,6 +175,7 @@ private:
     }
 
     std::array<optical::RateAdaptedEngine, 2> engines;
+    optical::StereoWorker stereoWorker;
     std::array<const std::atomic<float>*, controlCount> raw{};
     bool ready = false;
 };

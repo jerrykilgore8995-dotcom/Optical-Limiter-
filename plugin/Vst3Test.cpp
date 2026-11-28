@@ -156,18 +156,26 @@ int main(int argc, char** argv) {
         std::cerr << error << '\n';
         return 1;
     }
+    constexpr int blockSize = 512;
+    constexpr int warmup = 2;
+    constexpr int measured = 48;
+    constexpr double rate = 44100.;
+    const auto rightSample = [](int block, int i) {
+        return block < warmup ? 0.f : static_cast<float>(.08 * std::sin(
+            2 * std::numbers::pi * 733 * (block * blockSize + i) / rate));
+    };
+    std::array<float, (warmup + measured) * blockSize> stereoRight{};
     for (int channels : {1, 2}) {
         const auto bus = channels == 1 ? juce::AudioChannelSet::mono() : juce::AudioChannelSet::stereo();
         juce::AudioProcessor::BusesLayout layout;
         layout.inputBuses.add(bus);
         layout.outputBuses.add(bus);
         if (!instance->setBusesLayout(layout)) return 1;
-        instance->prepareToPlay(44100, 512);
-        juce::AudioBuffer<float> audio(channels, 512);
+        instance->prepareToPlay(rate, blockSize);
+        juce::AudioBuffer<float> audio(channels, blockSize);
         juce::MidiBuffer midi;
         std::array<double, 2> outEnergy{}, inEnergy{};
-        std::array<double, 10> times{};
-        constexpr int warmup = 2;
+        std::array<double, measured> times{};
         for (int block = 0; block < warmup + static_cast<int>(times.size()); ++block) {
             const bool rightDriven = channels == 2 && block >= warmup;
             for (int i = 0; i < 512; ++i) {
@@ -175,8 +183,7 @@ int main(int argc, char** argv) {
                                                                     * (block * 512 + i) / 44100.));
                 audio.setSample(0, i, input);
                 if (channels == 2) {
-                    const auto right = rightDriven ? static_cast<float>(.08 * std::sin(
-                        2 * std::numbers::pi * 733 * (block * 512 + i) / 44100.)) : 0.f;
+                    const auto right = rightSample(block, i);
                     audio.setSample(1, i, right);
                     if (block == warmup + static_cast<int>(times.size()) - 1) inEnergy[1] += right * right;
                 }
@@ -193,13 +200,15 @@ int main(int argc, char** argv) {
                     const auto output = audio.getSample(channel, i);
                     if (!std::isfinite(output) || (channel == 1 && !rightDriven && std::abs(output) > .001f))
                         return 1;
+                    if (channel == 1)
+                        stereoRight[static_cast<std::size_t>(block * blockSize + i)] = output;
                     if (block == warmup + static_cast<int>(times.size()) - 1) outEnergy[channel] += output * output;
                 }
             }
         }
         std::sort(times.begin(), times.end());
-        std::cout << channels << " driven channel(s), median " << (times[4] + times[5]) / 2
-                  << " ms/512, max " << times.back() << " ms/512" << '\n';
+        std::cout << channels << " driven channel(s), median " << (times[23] + times[24]) / 2
+                  << " ms/512, p95 " << times[45] << " ms/512, max " << times.back() << " ms/512" << '\n';
         for (int channel = 0; channel < channels; ++channel) {
             const double ratio = std::sqrt(outEnergy[channel] / inEnergy[channel]);
             std::cout << "Channel " << channel + 1 << " output/input RMS " << ratio << '\n';
@@ -208,6 +217,28 @@ int main(int argc, char** argv) {
         if (channels == 1) instance->releaseResources();
     }
     instance->releaseResources();
+    {
+        juce::AudioProcessor::BusesLayout mono;
+        mono.inputBuses.add(juce::AudioChannelSet::mono());
+        mono.outputBuses.add(juce::AudioChannelSet::mono());
+        if (!instance->setBusesLayout(mono)) return 1;
+        instance->prepareToPlay(rate, blockSize);
+        juce::AudioBuffer<float> audio(1, blockSize);
+        juce::MidiBuffer midi;
+        for (int block = 0; block < warmup + measured; ++block) {
+            for (int i = 0; i < blockSize; ++i) audio.setSample(0, i, rightSample(block, i));
+            instance->processBlock(audio, midi);
+            for (int i = 0; i < blockSize; ++i)
+                if (audio.getSample(0, i) != stereoRight[static_cast<std::size_t>(block * blockSize + i)])
+                    return 1;
+        }
+        instance->releaseResources();
+        juce::AudioProcessor::BusesLayout stereo;
+        stereo.inputBuses.add(juce::AudioChannelSet::stereo());
+        stereo.outputBuses.add(juce::AudioChannelSet::stereo());
+        if (!instance->setBusesLayout(stereo)) return 1;
+        std::cout << "Stereo right channel is sample-identical to mono playback\n";
+    }
     if (!checkFeedbackKnee(*instance) || !checkHighFrequencyResponse(*instance)) return 1;
     {
         // A platform host wraps the plug-in editor in a native child window.

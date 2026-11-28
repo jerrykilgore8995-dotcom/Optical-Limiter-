@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(OpticalLimiter VERSION 0.1.4 LANGUAGES C CXX)
+project(OpticalLimiter VERSION 0.1.5 LANGUAGES C CXX)
 
 include(CTest)
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
 set(OPTICAL_SPICE_SEED "" CACHE FILEPATH "Optional operating-point raw file exported by native/seed_deck.py")
 set(generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${generated}")
@@ -69,7 +70,7 @@ if(OPTICAL_BUILD_PLUGIN)
     target_compile_features(OpticalLimiter PRIVATE cxx_std_20)
     target_compile_definitions(OpticalLimiter PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
                                                       JUCE_VST3_CAN_REPLACE_VST2=0 NOMINMAX)
-    target_link_libraries(OpticalLimiter PRIVATE OpticalFaceplate juce::juce_audio_processors
+    target_link_libraries(OpticalLimiter PRIVATE OpticalFaceplate juce::juce_audio_processors Threads::Threads
                           juce::juce_recommended_config_flags)
 
     if(BUILD_TESTING)
@@ -80,7 +81,7 @@ if(OPTICAL_BUILD_PLUGIN)
         target_compile_features(OpticalVst3Test PRIVATE cxx_std_20)
         target_compile_definitions(OpticalVst3Test PRIVATE JUCE_PLUGINHOST_VST3=1
                                                          JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 NOMINMAX)
-        target_link_libraries(OpticalVst3Test PRIVATE OpticalFaceplate juce::juce_audio_processors
+        target_link_libraries(OpticalVst3Test PRIVATE OpticalFaceplate juce::juce_audio_processors Threads::Threads
                               juce::juce_recommended_config_flags)
     endif()
 endif()

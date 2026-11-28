@@ -8,7 +8,41 @@
 namespace optical {
 
 class RateAdaptedEngine {
+    static constexpr std::size_t halfDelay = 48;
+    static constexpr std::size_t historySize = 128;
+    static constexpr std::size_t mask = historySize - 1;
+    using History = std::array<double, historySize>;
+
 public:
+    struct State {
+        Engine::State circuit;
+        History input, evenOutput, oddOutput;
+        std::size_t index;
+    };
+
+    void save(State& state) const {
+        circuit.save(state.circuit);
+        state.input = input;
+        state.evenOutput = evenOutput;
+        state.oddOutput = oddOutput;
+        state.index = index;
+    }
+
+    void restore(const State& state) {
+        circuit.restore(state.circuit);
+        input = state.input;
+        evenOutput = state.evenOutput;
+        oddOutput = state.oddOutput;
+        index = state.index;
+    }
+
+    void process(float* samples, int frames, bool dry = false) {
+        for (int i = 0; i < frames; ++i) {
+            const double inputSample = std::isfinite(samples[i]) ? static_cast<double>(samples[i]) : 0.;
+            samples[i] = static_cast<float>(step(inputSample * fullScalePeakVolts, dry) / fullScalePeakVolts);
+        }
+    }
+
     static constexpr int latencyForRate(double hostRate) {
         return hostRate < 88200.0 ? 2 * halfDelay : 0;
     }
@@ -46,11 +80,6 @@ public:
     }
 
 private:
-    static constexpr std::size_t halfDelay = 48;
-    static constexpr std::size_t historySize = 128;
-    static constexpr std::size_t mask = historySize - 1;
-    using History = std::array<double, historySize>;
-
     static double oddPhase(const History& history, std::size_t newest) {
         double result = 0.;
         for (std::size_t i = 0; i < taps.size(); ++i) {
