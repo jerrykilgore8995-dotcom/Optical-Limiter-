@@ -126,7 +126,7 @@ inline double peakCalibration(double frequency, double peak) {
         }}},
     };
     const auto at = [&](const Row& row) {
-        const auto* hi = std::lower_bound(row.points.begin(), row.points.end(), peak,
+        const auto hi = std::lower_bound(row.points.begin(), row.points.end(), peak,
             [](const Point& point, double level) { return point.level < level; });
         if (hi == row.points.begin()) return hi->gain;
         if (hi == row.points.end()) return row.points.back().gain;
