@@ -41,6 +41,7 @@ public:
     struct State {
         History hp, hf, avg, sub, over, ratio, timing;
         double peak = 0., peakGain = 1.;
+        double quietTime = 0., onsetTime = 0.;
         ControlRipple ripple;
         CellDistortion cellDistortion;
         double level = 1e-9;
@@ -86,13 +87,24 @@ public:
     void accept(double pre, double gr, double cellVolts = 0., double cellConductance = 2e-8) {
         const auto sample = evaluate<true>(selected(pre, gr));
         save(state.hp, sample.hp); save(state.hf, sample.hf);
+        if (tunedRate > 0.) {
+            const double dt = 2. / tunedRate;
+            if (std::abs(sample.hf) < .0001) {
+                state.quietTime = std::min(.01, state.quietTime + dt);
+            } else {
+                if (state.quietTime >= .002) state.onsetTime = .00012;
+                state.quietTime = 0.;
+            }
+            state.onsetTime = std::max(0., state.onsetTime - dt);
+        }
         save(state.avg, sample.avg);
         state.peak = sample.peak;
         save(state.sub, sample.sub);
         save(state.over, sample.over); save(state.ratio, sample.ratio);
         save(state.timing, sample.timing);
         const bool crossing = state.ripple.accept(sample.hf, sample.timing, tunedRate,
-                                                  settings.ff > .5 ? 1. : settings.ratio, settings.ratio >= 8.);
+                                                  settings.ff > .5 ? 1. : settings.ratio,
+                                                  settings.ratio >= 8., settings.att);
         const double frequency = state.ripple.frequency();
         if (crossing && settings.ratio >= 8.) state.peakGain = peakCalibration(frequency, state.peak);
         state.cellDistortion.accept(cellVolts, cellConductance, tunedRate, crossing, frequency);
@@ -156,7 +168,12 @@ private:
             r.avgo = r.avg * eavg1;
         }
         if (AdvanceAll || settings.ratio >= 8.) {
-            r.peak = max(rectified, V{state.peak * peakDecay});
+            // A sharp edge after silence charges the reference peak
+            // detector above its steady envelope. Match that initial
+            // charge with a short onset gain on the ideal rectifier.
+            const double onsetGain = settings.ff > .5 && (state.quietTime >= .002
+                                                || state.onsetTime > 0.) ? 1.58 : 1.;
+            r.peak = max(rectified * onsetGain, V{state.peak * peakDecay});
         }
         r.level = max(settings.ratio < 8. ? r.avgo : r.peak * state.peakGain, V{1e-9});
         r.sub = sub(log10(max(V{.001}, min(V{15.}, r.level))) * -2. - threshold);

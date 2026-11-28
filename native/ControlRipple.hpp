@@ -14,7 +14,7 @@ public:
 
     double frequency() const { return period > 0. ? 1. / period : 0.; }
 
-    bool accept(double audio, double timing, double inverse, double loopRatio = 1., bool peak = false) {
+    bool accept(double audio, double timing, double inverse, double loopRatio = 1., bool peak = false, double attack = .01) {
         if (!(inverse > 0.)) {
             *this = {};
             return false;
@@ -30,7 +30,10 @@ public:
         const double prevCyclePeak = cyclePeak;
         cyclePeak = std::max(cyclePeak, absAudio);
         if (referencePeak > 1e-5 && (absAudio > 1.18 * referencePeak
-                || belowSignal > .13 * period)) stableCycles = 0;
+                || belowSignal > .13 * period)) {
+            stableCycles = 0;
+            stableTime = 0.;
+        }
 
         const bool crossed = audio >= 0. && previousAudio < 0.;
         if (crossed) {
@@ -42,9 +45,13 @@ public:
             const bool inBand = completed >= 1. / 22000. && completed <= 1. / 15.;
             const bool stable = inBand && std::abs(completed - period) < .025 * completed
                 && std::abs(prevCyclePeak - referencePeak) < .12 * prevCyclePeak;
-            if (stable && prevCyclePeak > 1e-5)
+            if (stable && prevCyclePeak > 1e-5) {
                 stableCycles = std::min(stableCycles + 1, 4);
-            else stableCycles = 0;
+                stableTime += completed;
+            } else {
+                stableCycles = 0;
+                stableTime = 0.;
+            }
             if (stableCycles == 2 || wet == 0.)
                 mean = current;
             else if (stableCycles > 2) {
@@ -66,7 +73,8 @@ public:
         }
         previousAudio = audio;
         previousTiming = timing;
-        const bool locked = stableCycles >= 2 && elapsed < 1.3 * period;
+        const bool locked = stableCycles >= 2 && stableTime >= 5. * attack
+                         && elapsed < 1.3 * period;
         wet += std::min(1., dt * (locked ? 400. : 1200.)) * (double(locked) - wet);
         if (!locked && wet < 1e-6) wet = 0.;
         return crossed;
@@ -93,7 +101,7 @@ private:
 
     double previousAudio = 0., previousTiming = 0., elapsed = 0., integral = 0.;
     double cyclePeak = 0., referencePeak = 0., belowSignal = 0., period = 0.;
-    double mean = 0., wet = 0.;
+    double mean = 0., wet = 0., stableTime = 0.;
     int stableCycles = 0;
 };
 
