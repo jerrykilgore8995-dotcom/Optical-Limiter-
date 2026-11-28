@@ -49,7 +49,11 @@ public:
         double level = 1e-9;
     };
 
-    void configure(const Settings& next) { settings = next; tunedRate = -1.; }
+    void configure(const Settings& next) {
+        settings = next;
+        detectorInputScale = std::pow(10., -.05 * settings.gdb);
+        tunedRate = -1.;
+    }
 
     void begin(double inverse) {
         using namespace detector_model;
@@ -67,9 +71,7 @@ public:
             ratio.tune(inverse, 1. / (10000. * gain * crrf));
             release.tune(inverse, 1. / settings.rel);
             attack.tune(inverse, 1. / settings.att);
-            // Keep the detector's reference upstream of Input trim while
-            // preserving the selected feed-forward or feedback signal.
-            threshold = (settings.sens - settings.gdb) / 10.;
+            threshold = settings.sens / 10.;
         }
         hp.begin(state.hp, inverse); hf.begin(state.hf, inverse);
         avg.begin(state.avg, inverse);
@@ -81,7 +83,7 @@ public:
 
     Result control(double pre, double gr) const {
         if (settings.sens <= thresholdOffSensitivity) return {darkTarget, 0., 0.};
-        const auto sample = evaluate<false>(DetectorVoltage{selected(pre, gr), 1.});
+        const auto sample = evaluate<false>(DetectorVoltage{selected(pre, gr), detectorInputScale});
         const auto target = targetFor(state.ripple.output(sample.timing, tunedRate));
         return {target.value, settings.ff * target.slope, (1. - settings.ff) * target.slope};
     }
@@ -139,7 +141,11 @@ private:
     static DetectorVoltage log10(DetectorVoltage v) {
         return {std::log10(v.value), v.slope / (2.302585092994046 * v.value)};
     }
-    double selected(double pre, double gr) const { return settings.ff * pre + (1. - settings.ff) * gr; }
+    double selected(double pre, double gr) const {
+        // Use the pre-trim reference throughout the detector, including
+        // the peak calibration and envelope limits.
+        return detectorInputScale * (settings.ff * pre + (1. - settings.ff) * gr);
+    }
 
     template<class V> V commandFor(V rrout) const {
         return min(V{4.}, max(V{0.}, rrout * -1.));
@@ -200,6 +206,7 @@ private:
 
     Settings settings;
     Pole hp, hf, avg, sub, over, ratio, attack, release;
+    double detectorInputScale = 1.;
     double peakDecay = 0., tunedRate = -1., threshold = 0., ratioGain = 0., darkTarget = 2e-8;
 };
 

@@ -11,25 +11,28 @@ namespace {
 
 bool checkDriveThreshold() {
     constexpr double rate = 44100.;
-    constexpr double frequency = 1000.;
-    struct Case { double inputDbu, trimDb, sensitivity, expectedGr; };
+    struct Case {
+        double inputDbu, trimDb, sensitivity, expectedGr;
+        double ratio = 2., frequency = 1000.;
+    };
     constexpr Case cases[]{
         {4., -18., 1., 2.98}, {4., 0., 1., 2.98}, {4., 18., 1., 2.98},
-        {-24., 18., 29., 2.98}, {24., -18., -19.1, 2.93},
+        {-24., 18., 29., 2.98}, {24., -18., -17.6, 2.96},
         {4., 18., optical::thresholdOffSensitivity, 0.},
+        {4., 0., 1., 5.14, 8., 5000.}, {4., 18., 1., 5.14, 8., 5000.},
     };
     for (const auto& test : cases) {
         optical::Settings settings;
         settings.ff = 1.;
         settings.soft = 0.;
-        settings.ratio = 2.;
+        settings.ratio = test.ratio;
         settings.gdb = test.trimDb;
         settings.sens = test.sensitivity;
         optical::RateAdaptedEngine engine;
         if (!engine.prepare(rate, settings)) return false;
         const double peak = std::numbers::sqrt2 * .775 * std::pow(10., test.inputDbu / 20.);
         for (int i = 0; i < static_cast<int>(rate * .75); ++i)
-            engine.step(peak * std::sin(2. * std::numbers::pi * frequency * i / rate));
+            engine.step(peak * std::sin(2. * std::numbers::pi * test.frequency * i / rate));
         const double reduction = engine.reductionDb();
         if (engine.failedSteps() || std::abs(reduction - test.expectedGr) > .15) {
             std::cerr << "Threshold check at " << test.inputDbu << " dBu and " << test.trimDb
