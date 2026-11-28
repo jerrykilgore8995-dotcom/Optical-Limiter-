@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FullDeck.hpp"
+#include "Detector.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +20,8 @@ public:
         std::copy(dcBias.begin(), dcBias.end(), m.v.begin());
         previous = older = trialStart = refinementStart = m.v;
         settings = {};
+        detector = {};
+        detector.configure(settings);
         lastInput = lastDelta = 0;
         failures = refined = 0;
         fixedStamps = LinearStamp(unknownCount, unknownCount + fixedCount);
@@ -27,15 +29,18 @@ public:
         fixedStamps.build();
         if (!prepareMatrix(0) || !newton(0, 0, 50))
             return false;
-        m.acceptCompanions(true);
+        accept(true);
         previous = older = m.v;
         settings = controls;
         if (settings.ff <= .5) settings.soft = 0;
+        detector.configure(settings);
         if (!newton(0, 0, 70))
             return false;
-        m.acceptCompanions(true);
+        accept(true);
         previous = older = m.v;
         if (!prepareMatrix(inverse)) return false;
+        subdivisionMatrix = std::move(m.matrix);
+        if (!prepareMatrix<true>(inverse)) return false;
         savedCompanions = m.companions;
         return true;
     }
@@ -46,6 +51,7 @@ public:
                 || settings.soft != next.soft || settings.sens != next.sens || settings.hpf != next.hpf
                 || settings.att != next.att || settings.rel != next.rel || settings.makeup != next.makeup) {
             settings = next;
+            detector.configure(settings);
             lastDelta = 0;
         }
     }
@@ -57,9 +63,10 @@ public:
         for (int i = 0; i < unknownCount; ++i)
             m.v[i] = previous[i] + predictor * (previous[i] - older[i]);
         if (newton(input, inverse, 10)) {
-            m.acceptCompanions(false);
+            accept(false);
         } else {
             savedCompanions = m.companions;
+            savedDetector = detector.state;
             // Uniform substeps keep the feedback peak detector's history
             // consistent across a burst-to-silence transition.
             const bool solved = settings.ff > .5
@@ -79,7 +86,11 @@ public:
         return voltage(outputNode);
     }
 
-    double voltage(int node) const { return m.voltage(node); }
+    double voltage(int node) const {
+        if (node == timingNode) return detector.state.timing.value;
+        if (node == detectorNode) return detector.state.level;
+        return m.voltage(node);
+    }
     double reductionDb() const {
         return 20 * std::log10((1 + 10000 * cg(voltage(cellNode))) / (1 + 10000 * 2e-8));
     }
@@ -101,9 +112,15 @@ public:
     int solverOperations() const { return m.matrix.operationCount(); }
 
 private:
+    void accept(bool dc) {
+        m.acceptCompanions(dc);
+        detector.accept(m.voltage(preNode), m.voltage(grNode));
+    }
+
     void restoreSample() {
         m.v = previous;
         m.companions = savedCompanions;
+        detector.state = savedDetector;
     }
 
     bool refineUniform(double delta) {
@@ -116,7 +133,7 @@ private:
                     complete = false;
                     break;
                 }
-                m.acceptCompanions(false);
+                accept(false);
             }
             if (complete) return true;
         }
@@ -137,7 +154,7 @@ private:
             const double fraction = static_cast<double>(position + stride) / divisions;
             const double coefficient = inverse * divisions / stride;
             if (newton(lastInput + delta * fraction, coefficient, 14)) {
-                m.acceptCompanions(false);
+                accept(false);
                 refinementStart = m.v;
                 position += stride;
                 stride = std::min(stride * 2, divisions / 2);
@@ -149,26 +166,33 @@ private:
         return position == divisions;
     }
 
+    template<bool FixedCaps = false>
     bool prepareMatrix(double coefficient) {
         m.matrix.resize(unknownCount);
         setKnownTerminals(m, settings, 0);
-        projectBehavior(m, settings);
+        detector.begin(coefficient);
+        const auto control = detector.control(m.voltage(preNode), m.voltage(grNode));
+        projectBehavior(m, settings, control.target);
         fixedStamps.addJacobian(m.matrix);
+        if constexpr (FixedCaps) stampCapacitorJacobian(m, coefficient);
         m.matrix.beginDynamicStamp();
-        stampDynamic(m, settings, coefficient);
+        stampDynamic<FixedCaps>(m, settings, coefficient, control.target, control.preSlope, control.grSlope);
         if (!m.matrix.prepare()) return false;
         m.matrix.clear();
         fixedStamps.addJacobian(m.matrix);
+        if constexpr (FixedCaps) stampCapacitorJacobian(m, coefficient);
         m.matrix.saveLinearEntries();
         m.matrix.cachePreparedFactorization();
         return true;
     }
 
+    template<bool FixedCaps>
     void stamp(double input, double coefficient, bool raw = false) {
         setKnownTerminals(m, settings, input);
-        projectBehavior(m, settings);
+        const auto control = detector.control(m.voltage(preNode), m.voltage(grNode));
+        projectBehavior(m, settings, control.target);
         fixedStamps.apply(m.matrix, m.v.data(), raw);
-        stampDynamic(m, settings, coefficient);
+        stampDynamic<FixedCaps>(m, settings, coefficient, control.target, control.preSlope, control.grSlope);
     }
 
     double merit() {
@@ -185,12 +209,23 @@ private:
     }
 
     bool newton(double input, double coefficient, int limit) {
-        stamp(input, coefficient);
+        if (coefficient == inverse) return solveStep<true>(input, coefficient, limit);
+        if (coefficient == 0.) return solveStep<false>(input, coefficient, limit);
+        std::swap(m.matrix, subdivisionMatrix);
+        const bool solved = solveStep<false>(input, coefficient, limit);
+        std::swap(m.matrix, subdivisionMatrix);
+        return solved;
+    }
+
+    template<bool FixedCaps>
+    bool solveStep(double input, double coefficient, int limit) {
+        detector.begin(coefficient);
+        stamp<FixedCaps>(input, coefficient);
         lastError = merit();
         for (int iter = 0; iter < limit; ++iter) {
             if (lastError < 1e-18) return true;
             if (!m.matrix.solve()) {
-                stamp(input, coefficient, true);
+                stamp<FixedCaps>(input, coefficient, true);
                 if (!m.matrix.solvePivoted()) return false;
             }
             trialStart = m.v;
@@ -202,7 +237,7 @@ private:
                 // merit limit. Keep the last trial exact for the fallback.
                 if (coefficient > 0 && scale > 1. / 8192
                         && rejectTrial(m, fixedStamps, coefficient, initial * (1. + 1e-10))) continue;
-                stamp(input, coefficient);
+                stamp<FixedCaps>(input, coefficient);
                 lastError = merit();
                 if (lastError < initial) break;
             }
@@ -212,7 +247,10 @@ private:
     }
 
     MNA m{unknownCount, fixedCount};
+    Sparse subdivisionMatrix;
     Settings settings;
+    Detector detector;
+    Detector::State savedDetector;
     LinearStamp fixedStamps{0, 0};
     std::vector<double> previous, older, trialStart, refinementStart;
     std::vector<MNA::Companion> savedCompanions;

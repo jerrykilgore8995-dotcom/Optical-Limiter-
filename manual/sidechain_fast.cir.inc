@@ -32,8 +32,13 @@ Gpkfeed 0 pkvel hfout 0 0.0001875708347
 Gpkrestore pkvel 0 pkcomp 0 0.0001875708347
 Gpkdamp pkvel 0 pkvel 0 0.0006098911232
 Epkedge pkedge 0 POLY(3) (hfout,0) (pkcomp,0) (pkvel,0) 0 8.69355234 -8.69355234 -22.793954
-* Fit the edge strength over the measured range, including weak pulses and compression at high drive.
-Bcharge 0 hold I={min(max(max(V(rect),1.02*V(pkedge)+max(0,min(0.45*(V(pkedge)-0.04),0.28*(0.18-V(pkedge))))-0.57*max(V(pkedge)-0.62,0))-V(hold),0)/8,max(13.5-V(hold),0)/100)}
+* The compensated amplifier charges at the crest as well as at the edge.
+* Its crest path dominates at higher drive before the edge path takes over.
+Bcrest crest 0 V={V(rect)+max(0,min(0.24*(V(rect)-0.28),0.28*(abs(V(hfout,pkcomp))-0.034)))}
+* Weak pulses travel farther through the compensated transition.
+Bpkshift pkshift 0 V={V(pkedge)+min(1,max(0,min((V(pkedge)-0.025)/0.02,(0.17-V(pkedge))/0.035)))*((0.18+3*max(0,min(0.04,V(pkedge)-0.062)))*V(hfout)-0.10*V(pkedge))}
+Bpkdrive pkdrive 0 V={1.02*V(pkshift)+max(0,min(0.45*(V(pkshift)-0.04),0.28*(0.18-V(pkshift))))-0.57*max(V(pkshift)-0.62,0)-0.38*max(0,min(V(pkshift)-0.51,0.68-V(pkshift)))}
+Bcharge 0 hold I={min(max(max(V(crest),V(pkdrive))-V(hold),0)/8,max(13.5-V(hold),0)/100)}
 CP hold 0 100n
 RP hold 0 47k
 Epkbuf pkout 0 hold 0 1

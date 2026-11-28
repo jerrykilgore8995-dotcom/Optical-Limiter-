@@ -179,9 +179,10 @@ struct MNA {
             h.charge = h.trial;
         }
     }
+    template<bool FixedJacobian = false>
     OPTICAL_STAMP_INLINE void capacitive(int a, int b, double c, int slot = -1) {
         residual(a, b, companion(c * (voltage(a) - voltage(b)), slot));
-        derivative(a, b, a, b, inverse * c);
+        if constexpr (!FixedJacobian) derivative(a, b, a, b, inverse * c);
     }
 
     struct Diode {

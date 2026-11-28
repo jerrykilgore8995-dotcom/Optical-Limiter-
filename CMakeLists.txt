@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(OpticalLimiter VERSION 0.1.3 LANGUAGES C CXX)
+project(OpticalLimiter VERSION 0.1.4 LANGUAGES C CXX)
 
 include(CTest)
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
@@ -24,7 +24,7 @@ endif()
 add_custom_command(OUTPUT "${generated}/FullDeck.hpp"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/flatten_deck.py" "${generated}/deck.json" "${deck}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/generate_full.py"
-            "${generated}/deck.json" "${seed}" "${generated}/FullDeck.hpp"
+            "${generated}/deck.json" "${seed}" "${generated}/FullDeck.hpp" --condense
     DEPENDS "${seed}" "${deck}" native/flatten_deck.py native/generate_full.py
             stage1/models/opa134.lib stage1/models/diodes.lib stage1/models/bjt.lib
     VERBATIM)

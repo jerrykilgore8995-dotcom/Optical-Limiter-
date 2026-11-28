@@ -7,6 +7,12 @@ seed_path=Path(sys.argv[2]) if len(sys.argv)>2 else None
 output_path=Path(sys.argv[3]) if len(sys.argv)>3 else root/'FullDeck.hpp'
 d=json.loads(deck_path.read_text())
 dev=d['devices']
+condense = '--condense' in sys.argv[4:]
+sidechain = {}
+if condense:
+    start = next(i for i, element in enumerate(dev) if element['name'] == 'bselect')
+    sidechain = {element['name']: element for element in dev[start:]}
+    dev = dev[:start]
 nodes=sorted({n for x in dev for n in x['nodes'] if n!='0'})
 # Explicit internal terminals for semiconductor series resistances.
 scale={'':1,'t':1e12,'g':1e9,'meg':1e6,'k':1e3,'m':1e-3,'u':1e-6,'n':1e-9,'p':1e-12,'f':1e-15}
@@ -152,14 +158,31 @@ out=['#pragma once','#include "MNA.hpp"','#include <cmath>','#include <algorithm
 'inline double cg(double x){return min(.005,max(2e-8,x));} inline double cs(double x){return min(4,max(0,x));}',
 f'inline constexpr int nodeCount={len(nodes)}, unknownCount={len(nodes)+len(branches)}, fixedCount={len(known)};',
 f'inline constexpr int outputNode={ix("out")}, preNode={ix("pre")}, grNode={ix("gr")}, cellNode={ix("cell")};',
-f'inline constexpr int timingNode={ix("timing")}, detectorNode={ix("det")};',
+f'inline constexpr int timingNode={-2 if condense else ix("timing")}, detectorNode={-3 if condense else ix("det")};',
 'inline constexpr std::array<double,unknownCount> dcBias{'+','.join(num(x) for x in bias())+'};',
  'inline constexpr std::array<const char*,unknownCount> unknownNames{'+','.join('"'+x+'"' for x in [*nodes,*branches])+'};']
+if condense:
+    out.append('namespace detector_model {')
+    for name in ('ch', 'cfb', 'rhf', 'rhalf', 'chb', 'rrect', 'crect', 'ra', 'ca',
+                 'raf', 'caf', 'cp', 'rp', 'rsub', 'csub', 'rif', 'cif', 'crrf', 'cpkfb', 'cpkvel'):
+        element = sidechain[name]
+        out.append(f'inline constexpr double {name} = {val(element,element["raw_value"])};')
+    for name, i in (('eavg',1), ('gpkint',1), ('gpkdamp',1),
+                    ('epkedge',1), ('epkedge',2), ('epkedge',3)):
+        element = sidechain[name]
+        out.append(f'inline constexpr double {name}{i} = {val(element, element["coefficients"][i])};')
+    for name, args in (('bcrest',('rect','hfout','pkcomp')), ('bpkshift',('pkedge','hfout')), ('bpkdrive',('pkshift',))):
+        body = expr(sidechain[name]['raw_value'].split('=',1)[1])
+        body = re.sub(r'\bv\(([^)]+)\)', lambda m:'('+'-'.join(m[1].split(','))+')', body)
+        out.append(f'template<class V> inline V {name}(' +
+                   ', '.join(f'V {arg}' for arg in args) + ') { using std::abs; return ' + body + '; }')
+    out.append('} // namespace detector_model')
 known_lines = [f'm.v[{ix(n)}]={value};' for n,value in known.items()]
 projection=[]
 projected_nodes = set()
 linear=[]
 dynamic=[]
+capacitor_jacobians=[]
 # These high-curvature detector equations often reject a Newton trial by
 # themselves. Only emit screens for rows whose complete residual is known.
 trial_rows = {ix(n): [] for n in ('charge', 'dpc#rs', 'dcl#rs', 'pkamp',
@@ -180,7 +203,13 @@ for x in stamps:
                     trial_dependencies[row].update((ix(p), ix(n)))
     if k=='r':line.append(f'm.conductance({a},{b},1./({val(x,raw)}));')
     elif k=='c':
-        line.append(f'm.capacitive({a},{b},{val(x,raw.split()[0])},{companion_slot});')
+        capacitance = val(x, raw.split()[0])
+        call = 'm.capacitive<FixedCaps>' if condense else 'm.capacitive'
+        line.append(f'{call}({a},{b},{capacitance},{companion_slot});')
+        if condense:
+            if control_names.search(capacitance):
+                raise ValueError(f'Parameter-dependent capacitance needs a dynamic stamp: {name}')
+            capacitor_jacobians.append(f'm.derivative({a},{b},{a},{b},inverse*({capacitance}));')
         companion_slot += 1
     elif k=='v':
         v='input' if raw.lower().startswith('sin(') else val(x,re.sub(r'(?i)^dc\s+','',raw))
@@ -225,6 +254,11 @@ for x in stamps:
         t,p=model(x['model']);line.append(f'm.jfet({a},{b},{rest[0]},{-1 if t=="pjf" else 1},{params(p,"vto beta is lambda",[-2,1e-4,1e-14,0])});')
     elif k=='s':
         t,p=model(x['model']);line.append(f'm.conductance({a},{b},v({rest[0]})-v({rest[1]})>{num(p.get("vt",0))}?{num(1/p.get("ron",1))}:{num(1/p.get("roff",1e12))});')
+    elif condense and name == 'btarget':
+        key = branches[name]
+        projection.append(f'm.v[{a}]=target;')
+        line.append(f'm.source({a},{b},{key},target);m.derivative({key},-1,preNode,-1,-targetPre,true);'
+                    f'm.derivative({key},-1,grNode,-1,-targetGr,true);')
     elif k=='b':
         mode,body=raw.split('=',1)
         refs=[]
@@ -265,14 +299,19 @@ out+=linear
 out+=['}', 'inline void setKnownTerminals(MNA& m,const Settings& s,double input) {',
       'using std::exp;using std::log; const auto [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;']
 out+=known_lines
-out+=['}', 'inline void stampDynamic(MNA& m,const Settings& s,double inverse) {',
-      'using std::exp;using std::log;using std::log10;using std::pow;using std::sqrt;',
+if condense:
+    out += ['}', 'inline void stampCapacitorJacobian(MNA& m,double inverse) {', *capacitor_jacobians]
+control_args = ',double target,double targetPre,double targetGr' if condense else ''
+project_args = ',double target' if condense else ''
+template = 'template<bool FixedCaps> ' if condense else ''
+out+=['}', f'{template}inline void stampDynamic(MNA& m,const Settings& s,double inverse{control_args}) {{',
+      'using std::abs;using std::exp;using std::log;using std::log10;using std::pow;using std::sqrt;',
       'const auto [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;',
       'auto v=[&](int n){return m.voltage(n);};m.beginCompanions(inverse);']
 out+=dynamic
 out+=['m.endCompanions();','}', f'inline constexpr int companionCount = {companion_slot};']
-out+=['inline void projectBehavior(MNA& m,const Settings& s) {',
-      'using std::exp;using std::log10;using std::pow;using std::sqrt;',
+out+=[f'inline void projectBehavior(MNA& m,const Settings& s{project_args}) {{',
+      'using std::abs;using std::exp;using std::log10;using std::pow;using std::sqrt;',
       'const auto& [gdb,freq,amp,ff,ratio,soft,sens,hpf,att,rel,makeup]=s;',
       'auto w=[&](int n){return m.voltage(n);};']
 out+=projection
