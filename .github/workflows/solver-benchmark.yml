@@ -1,0 +1,74 @@
+name: Windows native solver benchmark
+on:
+  push:
+    branches: [optical-limiter-windows-benchmark]
+jobs:
+  seed:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ngspice
+      - run: python native/seed_deck.py operating-point.raw
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seed
+          path: operating-point.raw
+  benchmark:
+    needs: seed
+    runs-on: windows-2022
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [msvc, selective, clang, clang-avx2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed
+          path: seed
+      - name: Compare baseline and optimized engines on the same runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-CimInstance Win32_Processor | Select-Object Name, MaxClockSpeed | Format-List
+          $seed = (Resolve-Path "seed/operating-point.raw").Path
+          $variant = "${{ matrix.variant }}"
+          git worktree add --detach baseline 4a981147ff786564a643a4fdd6e3c3cd23ca5f4c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $configuration = @()
+          if ($variant.StartsWith("clang")) { $configuration += @("-T", "ClangCL") }
+          if ($variant -eq "clang-avx2") { $configuration += @("-DCMAKE_CXX_FLAGS=/clang:-mavx2 /clang:-mfma") }
+          if ($variant -eq "selective") {
+            (Get-Content native/StampInline.hpp -Raw).Replace("#define OPTICAL_STAMP_INLINE __forceinline", "#define OPTICAL_STAMP_INLINE inline") |
+              Set-Content native/StampInline.hpp
+          }
+          $target = @'
+          add_executable(OpticalNativeBench native/WindowsBench.cpp)
+          add_dependencies(OpticalNativeBench OpticalCircuitDeck)
+          target_include_directories(OpticalNativeBench PRIVATE "${generated}" native)
+          target_compile_features(OpticalNativeBench PRIVATE cxx_std_20)
+          '@
+          Copy-Item native/WindowsBench.cpp baseline/native/WindowsBench.cpp
+          foreach ($source in @("baseline", ".")) {
+            Add-Content "$source/CMakeLists.txt" $target
+            $tag = if ($source -eq ".") { "optimized" } else { "original" }
+            $engine = "$source/native/Engine.hpp"
+            $body = Get-Content $engine -Raw
+            $body = $body.Replace("class Engine {", "inline unsigned long long benchStamps=0, benchSolves=0, benchPivoted=0; class Engine {")
+            $body = [regex]::Replace($body, 'void stamp\(double input, double coefficient(?:, bool raw = false)?\) \{', '$0 ++benchStamps;')
+            $body = $body.Replace("if (!m.matrix.solve())", "if (++benchSolves, !m.matrix.solve())")
+            $body = $body.Replace("if (!m.matrix.solvePivoted())", "if (++benchPivoted, !m.matrix.solvePivoted())")
+            Set-Content $engine $body
+            cmake -S $source -B "build-$tag" -A x64 @configuration "-DOPTICAL_BUILD_PLUGIN=OFF" "-DOPTICAL_SPICE_SEED=$seed"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build "build-$tag" --config Release --target OpticalNativeBench --parallel 2
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          foreach ($tag in @("original", "optimized")) {
+            Write-Output "Solver benchmark $variant $tag"
+            & "./build-$tag/Release/OpticalNativeBench.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
