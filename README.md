@@ -2,7 +2,7 @@
 
 Manual optical compressor and limiter based on the project’s accepted SPICE circuit. The VST3 runs a separate native nonlinear MNA circuit per audio channel for mono and dual-mono stereo. It uses the existing FF/FB detector selector, hard and soft knees, and six ratio positions.
 
-The plugin aligns a full-scale digital sine with +24 dBu at unity input. Threshold is the circuit’s sensitivity in dB below its reference. The zero-sensitivity position switches gain reduction off. Output controls the circuit makeup stage. Both meters report optical gain reduction before makeup from the solved LDR conductance.
+The plugin aligns a full-scale digital sine with +24 dBu at unity input. Threshold is the circuit’s sensitivity in dB below its reference. The zero-sensitivity position switches gain reduction off. Output controls the circuit makeup stage. Both meters report optical gain reduction before makeup from the solved LDR conductance. At host rates below 88.2 kHz the engine runs at twice the host rate with a linear-phase half-band FIR in each direction. At 44.1 kHz the circuit solves at 88.2 kHz and the plugin reports 96 samples of latency. The Signal Path switch delays dry audio by that same amount for host alignment.
 
 ## Build and test
 
@@ -20,4 +20,4 @@ Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to c
 
 ## Playback status
 
-The plugin is an offline-render preview. The full circuit’s driven solve times exceed the 11.61 ms per 512-sample block budget at 44.1 kHz in development tests. Adaptive trapezoidal refinement passes the driven through spot checks at 5 and 10 kHz. Full-band SPICE agreement and playback on the Ryzen 7 8745HS remain unverified. Auto and EPR are outside the manual circuit and are absent from the plugin.
+The plugin is an offline-render preview. The full circuit’s driven solve times exceed the 11.61 ms per 512-sample block budget at 44.1 kHz in development tests. The packaged test host compares the threshold-off gain at 1 and 20 kHz at 44.1 kHz against the SPICE through response. Playback on the Ryzen 7 8745HS remains unverified. Auto and EPR are outside the manual circuit and are absent from the plugin.

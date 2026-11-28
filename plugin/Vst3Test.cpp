@@ -4,11 +4,85 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <iostream>
 #include <memory>
 #include <numbers>
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
+
+namespace {
+
+bool checkHighFrequencyResponse(juce::AudioPluginInstance& instance) {
+    auto& parameters = instance.getParameters();
+    const auto threshold = std::find_if(parameters.begin(), parameters.end(), [](const auto* p) {
+        return p->getName(128) == "Threshold Sensitivity";
+    });
+    if (threshold == parameters.end()) return false;
+    (*threshold)->setValueNotifyingHost(0.f);
+
+    constexpr double rate = 44100.;
+    constexpr int blockSize = 512;
+    constexpr int settle = 4410;
+    constexpr int measure = 4410;
+    constexpr double amplitude = .007943282347; // -42 dBFS peak, equivalent to -18 dBu.
+    std::array<double, 2> gain{};
+    int band = 0;
+    for (const double frequency : {1000., 20000.}) {
+        instance.prepareToPlay(rate, blockSize);
+        if (instance.getLatencySamples() != 96) return false;
+        juce::AudioBuffer<float> audio(2, blockSize);
+        juce::MidiBuffer midi;
+        std::complex<double> output{};
+        for (int frame = 0; frame < settle + measure; frame += blockSize) {
+            for (int i = 0; i < blockSize; ++i) {
+                const double angle = 2 * std::numbers::pi * frequency * (frame + i) / rate;
+                audio.setSample(0, i, static_cast<float>(amplitude * std::sin(angle)));
+                audio.setSample(1, i, 0.f);
+            }
+            instance.processBlock(audio, midi);
+            for (int i = 0; i < blockSize && frame + i < settle + measure; ++i) {
+                if (frame + i < settle) continue;
+                const double angle = 2 * std::numbers::pi * frequency * (frame + i) / rate;
+                output += double(audio.getSample(0, i)) * std::complex<double>{std::cos(angle), -std::sin(angle)};
+            }
+        }
+        gain[band++] = 20 * std::log10(2 * std::abs(output) / (measure * amplitude));
+        instance.releaseResources();
+    }
+    const double rolloff = gain[1] - gain[0];
+    std::cout << "Packaged VST3 through gain at 1 kHz " << gain[0] << " dB, at 20 kHz "
+              << gain[1] << " dB, relative response " << rolloff << " dB, latency 96 samples\n";
+    return std::abs(rolloff + .06927) < .5 && std::abs(gain[0] + .15097) < .25;
+}
+
+bool checkBypass(juce::AudioProcessor& processor, bool useHostBypass, double rate) {
+    constexpr int impulse = 9;
+    constexpr int blockSize = 73;
+    processor.prepareToPlay(rate, blockSize);
+    const int latency = rate < 88200. ? 96 : 0;
+    if (processor.getLatencySamples() != latency) return false;
+    auto* bypass = processor.getBypassParameter();
+    if (!bypass) return false;
+    bypass->setValueNotifyingHost(useHostBypass ? 0.f : 1.f);
+    juce::AudioBuffer<float> audio(2, blockSize);
+    juce::MidiBuffer midi;
+    for (int block = 0; block < 3; ++block) {
+        audio.clear();
+        if (block == 0) audio.setSample(0, impulse, .25f);
+        if (useHostBypass) processor.processBlockBypassed(audio, midi);
+        else processor.processBlock(audio, midi);
+        for (int i = 0; i < blockSize; ++i) {
+            const float expected = block * blockSize + i == impulse + latency ? .25f : 0.f;
+            if (audio.getSample(0, i) != expected || audio.getSample(1, i) != 0.f) return false;
+        }
+    }
+    bypass->setValueNotifyingHost(0.f);
+    processor.releaseResources();
+    return true;
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
     if (argc != 3) return 2;
@@ -66,10 +140,16 @@ int main(int argc, char** argv) {
         if (!(ratio > .001 && ratio < .95)) return 1;
         if (channels == 1) instance->releaseResources();
     }
+    instance->releaseResources();
+    if (!checkHighFrequencyResponse(*instance)) return 1;
     {
         // A platform host wraps the plug-in editor in a native child window.
         // Capture the same editor directly so it can paint headlessly.
         const std::unique_ptr<juce::AudioProcessor> panelOwner(createPluginFilter());
+        if (!checkBypass(*panelOwner, false, 44100)
+                || !checkBypass(*panelOwner, true, 44100)
+                || !checkBypass(*panelOwner, false, 88200)) return 1;
+        std::cout << "Bypass impulse alignment verified at 44.1 and 88.2 kHz\n";
         panelOwner->prepareToPlay(44100, 512);
         juce::AudioBuffer<float> stereo(2, 512);
         juce::MidiBuffer midi;

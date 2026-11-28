@@ -49,10 +49,12 @@ jobs:
           $bundle = (Resolve-Path "build/OpticalLimiter_artefacts/Release/VST3/Optical Limiter.vst3").Path
           & build/OpticalVst3Test_artefacts/Release/OpticalVst3Test.exe $bundle "$PWD/Optical-Limiter-GUI.png"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item $bundle package -Recurse
       - uses: actions/upload-artifact@v4
         with:
-          name: Optical-Limiter-0.1.0-Windows-x64-VST3
-          path: build/OpticalLimiter_artefacts/Release/VST3/
+          name: Optical-Limiter-0.1.1-Windows-x64-VST3
+          path: package/
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:

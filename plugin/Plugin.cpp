@@ -1,5 +1,5 @@
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "Engine.hpp"
+#include "RateAdaptedEngine.hpp"
 
 #include <array>
 #include <atomic>
@@ -64,6 +64,7 @@ public:
         for (int ch = 0; ch < getTotalNumInputChannels(); ++ch) {
             ready = engines[static_cast<std::size_t>(ch)].prepare(rate, settings) && ready;
         }
+        setLatencySamples(optical::RateAdaptedEngine::latencyForRate(rate));
         status.store(ready, std::memory_order_relaxed);
         for (auto& meter : meters) meter.store(0, std::memory_order_relaxed);
     }
@@ -73,9 +74,9 @@ public:
         status.store(false, std::memory_order_relaxed);
     }
 
-    void processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffer&) override {
+    void processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi) override {
         if (read(bypass) >= .5f) {
-            zeroMeters();
+            processBlockBypassed(audio, midi);
             return;
         }
         juce::ScopedNoDenormals noDenormals;
@@ -101,7 +102,19 @@ public:
         status.store(converged, std::memory_order_relaxed);
     }
 
-    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override { zeroMeters(); }
+    void processBlockBypassed(juce::AudioBuffer<float>& audio, juce::MidiBuffer&) override {
+        zeroMeters();
+        if (!ready) return;
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch) {
+            auto& engine = engines[static_cast<std::size_t>(ch)];
+            float* samples = audio.getWritePointer(ch);
+            for (int i = 0; i < audio.getNumSamples(); ++i) {
+                const double input = std::isfinite(samples[i]) ? static_cast<double>(samples[i]) : 0.;
+                samples[i] = static_cast<float>(engine.step(input * optical::fullScalePeakVolts, true)
+                                                 / optical::fullScalePeakVolts);
+            }
+        }
+    }
 
     void getStateInformation(juce::MemoryBlock& data) override {
         if (const auto xml = state.copyState().createXml()) copyXmlToBinary(*xml, data);
@@ -163,7 +176,7 @@ private:
         for (auto& meter : meters) meter.store(0, std::memory_order_relaxed);
     }
 
-    std::array<optical::Engine, 2> engines;
+    std::array<optical::RateAdaptedEngine, 2> engines;
     std::array<const std::atomic<float>*, controlCount> raw{};
     bool ready = false;
 };
