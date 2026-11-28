@@ -30,6 +30,7 @@ public:
         m.acceptCompanions(true);
         previous = older = m.v;
         settings = controls;
+        if (settings.ff <= .5) settings.soft = 0;
         if (!newton(0, 0, 70))
             return false;
         m.acceptCompanions(true);
@@ -39,7 +40,8 @@ public:
         return true;
     }
 
-    void configure(const Settings& next) {
+    void configure(Settings next) {
+        if (next.ff <= .5) next.soft = 0;
         if (settings.gdb != next.gdb || settings.ff != next.ff || settings.ratio != next.ratio
                 || settings.soft != next.soft || settings.sens != next.sens || settings.hpf != next.hpf
                 || settings.att != next.att || settings.rel != next.rel || settings.makeup != next.makeup) {
@@ -83,7 +85,18 @@ public:
     }
     unsigned failedSteps() const { return failures; }
     double residual() const { return lastError; }
-    int worstEquation() const { return worst; }
+    int worstEquation() const {
+        int row = 0;
+        double peak = 0;
+        for (int i = 0; i < unknownCount; ++i) {
+            const double value = std::abs(m.matrix.rhs[i]) * (i < nodeCount ? 1. : .00015);
+            if (value > peak) {
+                peak = value;
+                row = i;
+            }
+        }
+        return row;
+    }
     unsigned refinedSteps() const { return refined; }
     int solverOperations() const { return m.matrix.operationCount(); }
 
@@ -160,18 +173,15 @@ private:
 
     double merit() {
         double error = 0;
-        double peak = 0;
-        for (int i = 0; i < unknownCount; ++i) {
-            const double value = m.matrix.rhs[i] * (i < nodeCount ? 1.0 : 0.00015);
-            if (!std::isfinite(value))
-                return std::numeric_limits<double>::infinity();
+        for (int i = 0; i < nodeCount; ++i) {
+            const double value = m.matrix.rhs[i];
             error += value * value;
-            if (std::abs(value) > peak) {
-                peak = std::abs(value);
-                worst = i;
-            }
         }
-        return error;
+        for (int i = nodeCount; i < unknownCount; ++i) {
+            const double value = m.matrix.rhs[i] * .00015;
+            error += value * value;
+        }
+        return std::isfinite(error) ? error : std::numeric_limits<double>::infinity();
     }
 
     bool newton(double input, double coefficient, int limit) {
@@ -209,7 +219,6 @@ private:
     double inverse = 0, lastInput = 0, lastDelta = 0;
     double lastError = 0;
     unsigned failures = 0, refined = 0;
-    int worst = 0;
 };
 
 } // namespace optical

@@ -132,8 +132,8 @@ RIF ov100 invneg 10k
 CIF ov100 invneg 22p
 XINV 0 invneg op on ov100 OPA134
 Bover over 0 V={10*max(-15,min(15,V(ov100)))}
-* Input-referred 10dB soft knee; feedback branch width approximation pending.
-Bknee knee 0 V={SENS<=0 ? 0 : SOFT ? (V(over)<-5 ? 0 : V(over)>5 ? V(over) : pow(V(over)+5,2)/20) : max(V(over),0)}
+* Feed-forward offers a 10 dB knee. Feedback uses the hard-knee command.
+Bknee knee 0 V={SENS<=0 ? 0 : (FF>0.5 ? SOFT : 0) ? (V(over)<-5 ? 0 : V(over)>5 ? V(over) : pow(V(over)+5,2)/20) : max(V(over),0)}
 * Physical ratio gain network, limited command still provisional.
 BK100 k100 0 V={0.1*V(knee)}
 RRIN k100 rrneg 10k

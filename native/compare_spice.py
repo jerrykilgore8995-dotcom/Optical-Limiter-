@@ -87,7 +87,7 @@ def main():
     exe = options.native_executable.resolve()
     rows = []
     cases = [(ff, soft, ratio, 30, level, 1000)
-             for ff in (1, 0) for soft in (0, 1)
+             for ff, soft in ((1, 0), (1, 1), (0, 0))
              for ratio in ((4, 12) if options.short else (2, 3, 4, 8, 12, 20))
              for level in ((-16,) if options.short else (-36, -26, -16, -6, 4))]
     if not options.short:

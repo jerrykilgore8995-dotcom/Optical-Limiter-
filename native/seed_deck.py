@@ -1,4 +1,4 @@
-"""Export the ngspice DC state of the unmodified manual circuit."""
+"""Export the ngspice DC state of a SPICE deck."""
 import os
 from pathlib import Path
 import re
@@ -6,11 +6,12 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 
-source = Path(__file__).resolve().parents[1] / 'manual' / 'manual.cir'
+source = (Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else
+          Path(__file__).resolve().parents[1] / 'manual' / 'manual.cir')
 dest = Path(sys.argv[1]).resolve()
 dest.parent.mkdir(parents=True, exist_ok=True)
-deck = re.sub(r'(?im)^\.include\s+(\S+)',
-              lambda m: f'.include "{(source.parent / m[1]).resolve().as_posix()}"',
+deck = re.sub(r'(?im)^\.include[ \t]+(?:"([^"]+)"|(\S+))',
+              lambda m: f'.include "{(source.parent / (m[1] or m[2])).resolve().as_posix()}"',
               source.read_text())
 deck = re.sub(r'(?im)^\.(op|tran|end)\b[^\n]*', '', deck)
 with TemporaryDirectory() as directory:

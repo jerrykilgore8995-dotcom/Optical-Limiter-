@@ -1,26 +1,31 @@
 cmake_minimum_required(VERSION 3.22)
-project(OpticalLimiter VERSION 0.1.2 LANGUAGES C CXX)
+project(OpticalLimiter VERSION 0.1.3 LANGUAGES C CXX)
 
 include(CTest)
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 set(OPTICAL_SPICE_SEED "" CACHE FILEPATH "Optional operating-point raw file exported by native/seed_deck.py")
 set(generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${generated}")
+set(deck "${generated}/Optical-Limiter-Fast.cir")
+add_custom_command(OUTPUT "${deck}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/manual/build_fast_deck.py" "${deck}"
+    DEPENDS manual/build_fast_deck.py manual/manual.cir manual/sidechain_fast.cir.inc
+    VERBATIM)
 if(OPTICAL_SPICE_SEED)
     set(seed "${OPTICAL_SPICE_SEED}")
 else()
     set(seed "${generated}/operating-point.raw")
     add_custom_command(OUTPUT "${seed}"
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/seed_deck.py" "${seed}"
-        DEPENDS manual/manual.cir native/seed_deck.py
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/seed_deck.py" "${seed}" "${deck}"
+        DEPENDS "${deck}" native/seed_deck.py
                 stage1/models/opa134.lib stage1/models/diodes.lib stage1/models/bjt.lib
         VERBATIM)
 endif()
 add_custom_command(OUTPUT "${generated}/FullDeck.hpp"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/flatten_deck.py" "${generated}/deck.json"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/flatten_deck.py" "${generated}/deck.json" "${deck}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/generate_full.py"
             "${generated}/deck.json" "${seed}" "${generated}/FullDeck.hpp"
-    DEPENDS "${seed}" native/flatten_deck.py native/generate_full.py manual/manual.cir
+    DEPENDS "${seed}" "${deck}" native/flatten_deck.py native/generate_full.py
             stage1/models/opa134.lib stage1/models/diodes.lib stage1/models/bjt.lib
     VERBATIM)
 add_custom_target(OpticalCircuitDeck DEPENDS "${generated}/FullDeck.hpp")
@@ -47,6 +52,7 @@ if(OPTICAL_BUILD_PLUGIN)
     FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
                              GIT_TAG 8.0.10 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(JUCE)
+    juce_add_binary_data(OpticalFaceplate SOURCES plugin/assets/PurpleFaceplate.jpg)
 
     juce_add_plugin(OpticalLimiter
         COMPANY_NAME Kilgore
@@ -63,7 +69,7 @@ if(OPTICAL_BUILD_PLUGIN)
     target_compile_features(OpticalLimiter PRIVATE cxx_std_20)
     target_compile_definitions(OpticalLimiter PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
                                                       JUCE_VST3_CAN_REPLACE_VST2=0 NOMINMAX)
-    target_link_libraries(OpticalLimiter PRIVATE juce::juce_audio_processors
+    target_link_libraries(OpticalLimiter PRIVATE OpticalFaceplate juce::juce_audio_processors
                           juce::juce_recommended_config_flags)
 
     if(BUILD_TESTING)
@@ -74,7 +80,7 @@ if(OPTICAL_BUILD_PLUGIN)
         target_compile_features(OpticalVst3Test PRIVATE cxx_std_20)
         target_compile_definitions(OpticalVst3Test PRIVATE JUCE_PLUGINHOST_VST3=1
                                                          JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 NOMINMAX)
-        target_link_libraries(OpticalVst3Test PRIVATE juce::juce_audio_processors
+        target_link_libraries(OpticalVst3Test PRIVATE OpticalFaceplate juce::juce_audio_processors
                               juce::juce_recommended_config_flags)
     endif()
 endif()

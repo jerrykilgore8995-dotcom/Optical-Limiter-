@@ -14,6 +14,50 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
 namespace {
 
+bool checkFeedbackKnee(juce::AudioPluginInstance& instance) {
+    const auto& parameters = instance.getParameters();
+    const auto find = [&](const char* name) -> juce::AudioProcessorParameter* {
+        const auto at = std::find_if(parameters.begin(), parameters.end(),
+                                     [=](const auto* p) { return p->getName(128) == name; });
+        return at == parameters.end() ? nullptr : *at;
+    };
+    auto* topology = find("Detector Topology");
+    auto* knee = find("Feed-forward Knee");
+    auto* threshold = find("Threshold Sensitivity");
+    if (!topology || !knee || !threshold) return false;
+    topology->setValueNotifyingHost(0.f);
+    threshold->setValueNotifyingHost(1.f);
+    constexpr int blockSize = 512;
+    constexpr int blocks = 5;
+    std::array<float, blockSize * blocks> feedback{};
+    juce::AudioBuffer<float> audio(2, blockSize);
+    juce::MidiBuffer midi;
+    bool equal = true;
+    for (int soft = 0; soft < 2; ++soft) {
+        knee->setValueNotifyingHost(static_cast<float>(soft));
+        instance.prepareToPlay(44100., blockSize);
+        for (int block = 0; block < blocks; ++block) {
+            audio.clear();
+            for (int i = 0; i < blockSize; ++i) {
+                const int sample = block * blockSize + i;
+                audio.setSample(0, i, static_cast<float>(
+                    .01 * std::sin(2 * std::numbers::pi * 1000 * sample / 44100.)));
+            }
+            instance.processBlock(audio, midi);
+            for (int i = 0; i < blockSize; ++i) {
+                const int sample = block * blockSize + i;
+                const float output = audio.getSample(0, i);
+                if (soft == 0) feedback[sample] = output;
+                else equal = equal && feedback[sample] == output;
+            }
+        }
+        instance.releaseResources();
+    }
+    topology->setValueNotifyingHost(1.f);
+    if (equal) std::cout << "Feedback output is identical for both legacy knee settings\n";
+    return equal;
+}
+
 bool checkHighFrequencyResponse(juce::AudioPluginInstance& instance) {
     auto& parameters = instance.getParameters();
     const auto threshold = std::find_if(parameters.begin(), parameters.end(), [](const auto* p) {
@@ -164,7 +208,7 @@ int main(int argc, char** argv) {
         if (channels == 1) instance->releaseResources();
     }
     instance->releaseResources();
-    if (!checkHighFrequencyResponse(*instance)) return 1;
+    if (!checkFeedbackKnee(*instance) || !checkHighFrequencyResponse(*instance)) return 1;
     {
         // A platform host wraps the plug-in editor in a native child window.
         // Capture the same editor directly so it can paint headlessly.
