@@ -259,6 +259,10 @@ for x in stamps:
         projection.append(f'm.v[{a}]=target;')
         line.append(f'm.source({a},{b},{key},target);m.derivative({key},-1,preNode,-1,-targetPre,true);'
                     f'm.derivative({key},-1,grNode,-1,-targetGr,true);')
+    elif name == 'bldr' and 'ldr_even_30k' in d['parameters']:
+        even = ','.join(expr(d['parameters'][key])
+                        for key in ('ldr_even_30k', 'ldr_even_3k', 'ldr_even_knee'))
+        line.append(f'm.photocell({a},{b},{ix("cell")},{even});')
     elif k=='b':
         mode,body=raw.split('=',1)
         refs=[]

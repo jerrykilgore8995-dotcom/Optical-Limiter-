@@ -7,7 +7,36 @@
 #include <numbers>
 #include <string_view>
 
+namespace {
+
+bool checkControlRipple() {
+    constexpr double rate = 88200.;
+    constexpr double inverse = 2. * rate;
+    for (const double frequency : {100., 1000.}) {
+        optical::ControlRipple ripple;
+        double error = 0.;
+        int count = 0;
+        for (int i = 0; i < static_cast<int>(rate * .25); ++i) {
+            const double phase = 2. * std::numbers::pi * frequency * i / rate;
+            const double timing = .8 + .01 * std::cos(2. * phase)
+                + .005 * std::cos(4. * phase) + .0025 * std::cos(6. * phase);
+            const double output = ripple.output(timing, inverse);
+            if (frequency == 1000. && output != timing) return false;
+            if (i >= static_cast<int>(rate * .15)) {
+                error += (output - .8) * (output - .8);
+                ++count;
+            }
+            ripple.accept(std::sin(phase), timing, inverse);
+        }
+        if (frequency == 100. && std::sqrt(error / count) > .00001) return false;
+    }
+    return true;
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--ripple") return checkControlRipple() ? 0 : 1;
     if (argc < 8 || argc > 10 || (argc == 10 && std::string_view(argv[9]) != "burst")) {
         std::cerr << "Usage: OpticalEngineTest FF soft ratio sensitivity input_dBu seconds sample_rate [frequency] [burst]\n";
         return 2;

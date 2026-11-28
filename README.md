@@ -20,6 +20,12 @@ The Windows x64 GitHub Actions job builds with clang-cl and targets CPUs with AV
 
 Use `native/compare_spice.py` with the built `OpticalEngineTest` executable to compare native output, gain reduction, phase, and THD with a fresh ngspice run of the full vendor reference deck. `--short` runs both detector branches across the three modes. The 5% flag evaluates fundamental amplitude and gain reduction. Phase and THD are reported separately.
 
+## Photocell harmonics
+
+The reduced deck adds a small polarity asymmetry to the VTL5C1 current–voltage equation. Its low-voltage scale follows the 3 kΩ and 30 kΩ traces in PerkinElmer Figure 3(a). The odd component of the photocell equation and the manufacturer semiconductor models retain their original form. The K2/K4/K6 partition is an estimate because the source plots total distortion. Outside the two resistance anchors the coefficient is held at the nearest anchor.
+
+The VST3 applies a digital notch bank to the gain command when the detector is tracking a stable tone between 45 and 300 Hz. The notches follow the second, fourth and sixth multiples in the control signal. A soft transition favors the raw timing control during larger changes. The vendor reference and printed reduced SPICE deck do not include these digital notches.
+
 ## Reduced sidechain
 
 The BJT receiver, optical audio stage, makeup and output amplifiers retain their manufacturer models. The sidechain uses buffered RC stages, a precision rectifier and a current-limited peak-charge model with both edge and crest charging. The native solver eliminates these sidechain equations algebraically. It solves the remaining 129 audio and control unknowns with the detector's derivative in the Newton matrix. Trapezoidal detector history advances only when a circuit step is accepted.

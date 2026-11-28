@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(OpticalLimiter VERSION 0.1.5 LANGUAGES C CXX)
+project(OpticalLimiter VERSION 0.1.6 LANGUAGES C CXX)
 
 include(CTest)
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
@@ -37,6 +37,7 @@ if(BUILD_TESTING)
     add_dependencies(OpticalEngineTest OpticalCircuitDeck)
     target_include_directories(OpticalEngineTest PRIVATE "${generated}" native)
     target_compile_features(OpticalEngineTest PRIVATE cxx_std_20)
+    add_test(NAME optical-control-ripple COMMAND OpticalEngineTest --ripple)
     add_test(NAME optical-engine COMMAND OpticalEngineTest 1 1 4 15 -8 .02 44100)
     foreach(frequency IN ITEMS 5000 10000)
         add_test(NAME optical-through-${frequency}Hz

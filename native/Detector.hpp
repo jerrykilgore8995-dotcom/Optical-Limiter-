@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FullDeck.hpp"
+#include "ControlRipple.hpp"
 
 #include <array>
 #include <type_traits>
@@ -43,6 +44,7 @@ public:
     struct State {
         History hp, hf, half, rect, avg, avgo, sub, over, ratio, timing;
         PeakState<double> peak;
+        ControlRipple ripple;
         std::array<double, 7> hfPast{};
         double hfRate = 0.;
         std::size_t hfValid = 0;
@@ -86,7 +88,7 @@ public:
     Result control(double pre, double gr) const {
         if (settings.sens <= 0.) return {darkTarget, 0., 0.};
         const auto sample = evaluate<false>(DetectorVoltage{selected(pre, gr), 1.});
-        const auto target = targetFor(sample.timing);
+        const auto target = targetFor(state.ripple.output(sample.timing, tunedRate));
         return {target.value, settings.ff * target.slope, (1. - settings.ff) * target.slope};
     }
 
@@ -104,6 +106,7 @@ public:
         save(state.sub, sample.sub);
         save(state.over, sample.over); save(state.ratio, sample.ratio);
         save(state.timing, sample.timing);
+        state.ripple.accept(sample.hf, sample.timing, tunedRate);
         state.level = sample.level;
     }
 
