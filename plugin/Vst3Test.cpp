@@ -153,12 +153,14 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        const double ratio = std::sqrt(outEnergy / inEnergy);
         std::sort(times.begin(), times.end());
-        std::cout << channels << " channel(s), output/input RMS " << ratio
-                  << ", median " << (times[4] + times[5]) / 2
+        std::cout << channels << " driven channel(s), median " << (times[4] + times[5]) / 2
                   << " ms/512, max " << times.back() << " ms/512" << '\n';
-        if (!(ratio > .001 && ratio < .95)) return 1;
+        for (int channel = 0; channel < channels; ++channel) {
+            const double ratio = std::sqrt(outEnergy[channel] / inEnergy[channel]);
+            std::cout << "Channel " << channel + 1 << " output/input RMS " << ratio << '\n';
+            if (!(ratio > .001 && ratio < .95)) return 1;
+        }
         if (channels == 1) instance->releaseResources();
     }
     instance->releaseResources();
